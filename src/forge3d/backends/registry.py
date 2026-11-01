@@ -145,4 +145,19 @@ def run(
                                        log=f"spec.mode={mode!r}, backend={name!r}")
 
     backend = get_backend(name)
+
+    # Central execution policy. Every code-running backend is refused here when
+    # execution is disabled, so the setting is a property of the system rather
+    # than of one backend remembering to check.
+    from ..config import get_settings
+
+    if backend.executes_user_code and not get_settings().allow_code_exec:
+        return name, BackendResult(
+            ok=False,
+            error=(f"code execution is disabled (FORGE3D_ALLOW_CODE_EXEC=false); "
+                   f"the {name!r} backend runs caller-supplied code"),
+            log=("Use a non-code backend (image, planet, shape, hosted), or enable "
+                 "execution if the caller is trusted."),
+        )
+
     return name, backend.generate(spec, out_dir, source=source, **kwargs)
