@@ -4,6 +4,49 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.5.0] — 2026-11-01
+
+Parametric surfaces: 15 shape families defined by equations, so an agent can make
+"anything" by naming a formula instead of writing vertex loops.
+
+### Added
+
+- **`forge3d.geometry.surfaces`** — a catalogue of equation-driven shapes, each
+  with its formula, parameter documentation and a `closed` flag:
+
+  **Solids** (watertight, printable): `supershape` (Gielis superformula),
+  `spherical_harmonic`, `superellipsoid`, `torus_knot` (p,q), `lissajous`,
+  `spring`, `seashell`, `involute_gear` (real meshing tooth profile),
+  `twisted_prism`, `lathe` (solid of revolution from a profile), `bumpy_sphere`.
+
+  **Open surfaces** (visual only, honestly marked): `mobius`, `helicoid`,
+  `catenoid`. **Fractal**: `menger_sponge` (multi-body).
+
+- **`create_shape`** MCP tool — build any family, export to glb/stl/obj/ply/off/
+  gltf/dae, validate, preview, and optionally wrap in a viewer page.
+- **`list_shapes`** MCP tool — returns the catalogue with equations and defaults,
+  so an agent can choose a family rather than guess parameter names.
+- `docs/surfaces.md` — every equation written out, with parameter tables and a
+  resolution/face-count guide.
+
+### Fixed
+
+- **Caps produced non-watertight "solids".** Pole rings that collapse to a point
+  left zero-area triangles after `process=True` deleted them, so eleven shapes
+  claimed to be closed and leaked. A single ring-based primitive with explicit
+  apex/flat caps and a degenerate-face filter replaced four bespoke builders;
+  every closed shape is now watertight with consistent winding, asserted per shape
+  by the test suite.
+- **Tube caps were wound inconsistently**, leaving `spring` and `seashell`
+  inside-out at the ends.
+
+### Tests
+
+291 passing (was 224). New `tests/test_surfaces.py` (67) iterates the whole
+catalogue and asserts, per shape, that it builds, is finite, is deterministic,
+and — when it claims to be closed — is watertight, consistently wound, and
+positive-volume.
+
 ## [0.4.0] — 2026-11-01
 
 Response to an external review of the repo (a ChatGPT transcript): procedural
