@@ -21,8 +21,10 @@ x = 1
 """
 
 
-def test_all_five_backends_registered():
-    assert set(backends.ALL) == {"procedural", "openscad", "blender", "cadquery", "hosted"}
+def test_all_six_backends_registered():
+    assert set(backends.ALL) == {
+        "procedural", "image", "openscad", "blender", "cadquery", "hosted",
+    }
 
 
 def test_describe_reports_availability_honestly():
