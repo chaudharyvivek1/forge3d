@@ -82,7 +82,7 @@ def test_plan_model_over_mcp_flags_missing_dimensions():
 def test_list_backends_over_mcp():
     out = _call("list_backends", {})
     names = {b["name"] for b in out["backends"]}
-    assert names == {"procedural", "openscad", "blender", "cadquery", "hosted"}
+    assert names == {"procedural", "image", "openscad", "blender", "cadquery", "hosted"}
 
 
 def test_bad_input_returns_a_hint_not_a_protocol_error():
