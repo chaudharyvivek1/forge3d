@@ -116,11 +116,28 @@ nothing configured            an error that names every env var you could set
 `mode` still applies on top: `mode="local"` refuses the hosted backend even if you
 name it explicitly, so a provider can never be reached by accident.
 
-## Retries and money
+## Retries, idempotency and money
 
 `request_with_retries` backs off exponentially with jitter and retries **5xx and
-connection errors only**. A 4xx is the caller's fault; retrying it burns the
-provider's quota and your credits.
+connection errors only** — for GETs. A 4xx is the caller's fault; retrying it
+burns the provider's quota and your credits.
+
+**Job creation is different.** A submit that times out may already have created a
+job, and a blind retry buys a second generation. `submit_request()` therefore:
+
+- adds an `Idempotency-Key` header, so a provider that supports it can dedupe;
+- passes `idempotent=False`, which disables retries on timeouts and 5xx;
+- raises `AmbiguousSubmission` on an ambiguous timeout, carrying the key.
+
+The backend turns that into `status: uncertain` — not `failed` — because claiming
+failure invites a retry that costs money. Reconcile against the provider with the
+key first.
+
+## Availability means the *selected* provider
+
+`available()` resolves `FORGE3D_PROVIDER` and asks that provider, not "is anything
+configured". A Meshy key missing while Tripo is configured used to report the
+hosted backend as available and then fail at submission.
 
 `estimate()` exists so a caller can budget before spending, and `mode="local"`
 exists so a caller can refuse to spend at all.
