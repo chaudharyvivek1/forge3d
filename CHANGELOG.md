@@ -4,6 +4,73 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.3.0] — 2026-11-01
+
+Secure execution, real image-to-3D, and production reliability. Also fixes the
+two CI failures that the v0.2.1 release shipped with.
+
+### Fixed (CI)
+
+- **Ubuntu jobs failed:** the CPU rlimit fires as `SIGXCPU` (-24) *before* the
+  parent's wall-clock timeout on a fast runner, so the failure fell through to a
+  generic "exit -24" message and the test's assertion on "killed" failed. Return
+  codes are now decoded to signal names, and both paths say what happened.
+- **Windows jobs failed:** the parent decoded child output as UTF-8, but the
+  child still *emitted* cp1252, so printing a Devanagari string raised
+  UnicodeEncodeError. Children now get `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1`.
+
+### Secure execution
+
+- **Environment scrubbing.** Child processes no longer inherit the parent's
+  environment. Anything matching `KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|
+  PRIVATE|SESSION|COOKIE` is dropped, so `FORGE3D_HOSTED_KEY` and cloud
+  credentials are unreachable from agent-written code.
+- **`FORGE3D_SANDBOX`** — `auto` (default) uses **bubblewrap** when present:
+  read-only root, private `/tmp`, no network, own PID namespace, write access only
+  to the work directory. `unshare` is opt-in because it needs capabilities most
+  containers withhold. The job metadata records the isolation that actually ran
+  (`bwrap` / `unshare-net` / `rlimit`), and `doctor` self-tests the wrapper instead
+  of assuming it works.
+- **More rlimits:** `RLIMIT_FSIZE` (512 MiB), `RLIMIT_NOFILE` (256),
+  `RLIMIT_CORE` (0), on top of CPU and optional address space.
+- **A lesson worth recording:** the first scrub used a fixed allowlist and broke
+  `pip install --user` installs by dropping `PYTHONUSERBASE` — the child could no
+  longer import forge3d. The policy is now pattern-based with an explicit deny
+  list, and a test asserts secrets are gone *and* the interpreter still works.
+
+### Real image-to-3D
+
+- **New `image` backend** — geometry derived from pixels, deterministic, no GPU:
+  - `relief`: luminance → height on a solid base (plaques, lithophanes, height maps)
+  - `silhouette`: alpha/luminance → extruded profile with holes preserved
+  - `auto`: transparent background → silhouette, else relief
+- Output is watertight with consistent winding; the silhouette test asserts the
+  exact analytic volume of a ring ($$1-(14/40)^2$$ of the disc) to within 4%.
+- **Budget-aware resolution:** a relief costs $$4(g-1)^2+8(g-1)$$ triangles, and
+  the grid is shrunk to fit `poly_budget` before generating rather than decimated
+  afterwards. A 512 grid is ~1.05M triangles and was a genuine production hazard.
+- `networkx` added as a dependency: `trimesh.repair.fix_winding` needs it, so
+  `repair_model` would have raised ModuleNotFoundError on a broken mesh.
+
+### Production reliability
+
+- **`GET /health`** — unauthenticated, reports version, uptime, exec mode, the
+  sandbox in force, and job counts. Never a token or key.
+- **Concurrency limiting** — `FORGE3D_MAX_CONCURRENT` (default 2) with a bounded
+  queue (`FORGE3D_QUEUE_WAIT`, default 30 s), then an explicit "server busy".
+  Slots are released in `finally`; a failed build cannot leave the server stuck.
+- **Rate limiting** — `FORGE3D_RATE_LIMIT` per token/IP, `429` with `Retry-After`.
+- **Retries** — hosted calls back off exponentially with jitter on 5xx and
+  connection errors, never on 4xx.
+- **Structured logs** — `FORGE3D_LOG_JSON=1` emits one JSON line per tool call
+  (via an MCP middleware, so stdio clients are covered) and per HTTP request.
+- New docs: `docs/image-to-3d.md`, `docs/reliability.md`.
+
+### Tests
+
+198 passing (was 162). New suites: `test_image_backend.py` (20) and
+`test_reliability.py` (16).
+
 ## [0.2.1] — 2026-11-01
 
 Response to an external security and reliability review. Four of the five
