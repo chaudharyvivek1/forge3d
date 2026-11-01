@@ -4,6 +4,67 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.6.5] — 2026-11-01
+
+Pipeline reliability hardening. Two defects, both confirmed against the source
+before changing anything, plus a third found while verifying them.
+
+### Fixed — the concurrency slot now covers the whole pipeline
+
+The slot was released as soon as the backend returned, so mesh re-opening,
+validation, preview rendering and viewer generation all ran *outside* the limit.
+With `FORGE3D_MAX_CONCURRENT=2` you could have four pipelines in flight.
+
+`create_model` now acquires once and releases once, in a `finally`, around a new
+`_run_generation_pipeline()`. Every exit path — backend exception, unreadable
+output, validation error, preview failure, viewer failure, success — goes through
+that single release. Post-processing is inside the slot because it is part of
+generating a model; unrelated work (job lookup, listing) is not.
+
+### Fixed — image temp directories are cleaned up even when loading fails
+
+`_load_image()` ran *before* the `try/finally`, so a corrupt or unsupported image
+returned early and left the downloaded file on disk permanently. The cleanup
+region now starts the moment `_resolve_image()` succeeds and covers loading and
+every later stage. It remains request-local: `temp_dir` is `None` for a
+caller-supplied path, so an input file is never deleted.
+
+### Fixed — one heartbeat thread per process, not per job
+
+Found while verifying the above: `auto_heartbeat()` started a thread per job that
+slept a full interval (20 s) before its first check, so every generation left a
+live thread behind. Under load this exhausted the thread pool — the full test
+suite failed with `can't start new thread` and a `MemoryError` inside pytest.
+A single shared ticker now touches every registered job, with a cadence adapted to
+the smallest registered interval.
+
+### Fixed — image file handles are released before cleanup
+
+`_load_image()` now opens the file in a context manager. On Windows `rmtree`
+cannot delete a directory while a handle inside it is open, and an unclosed PIL
+image keeps one until garbage collection. The returned object is a converted copy,
+so closing the source is safe.
+
+### Tests
+
+427 passing (was 409). Two new suites:
+
+- `tests/test_pipeline_slots.py` (10) — a second generation is refused while the
+  first renders previews or validates; success, backend exception, unreadable
+  output, validation exception, preview failure, viewer failure and repeated
+  failures all release the slot; and the release happens exactly once. Ordering is
+  proved with events, not sleeps.
+- `tests/test_image_cleanup.py` (8) — temp dir removed on decode failure and on
+  unsupported formats, removed after success, caller-owned files preserved,
+  concurrent requests independent, cleanup after a later stage raises, and the
+  file handle is released.
+
+### Not in this release
+
+No STDIO interface, no MCP transport changes, no cloud platform, no agent
+orchestration. `create_model` still blocks; the asynchronous job API remains
+planned for a later version (`forge3d-v0.7.0-PLAN.md`).
+
 ## [0.6.4] — 2026-11-01
 
 CI and concurrency, as the third review recommended before any new features. Two
