@@ -364,7 +364,15 @@ def test_heartbeat_stops_a_live_job_being_recovered(tmp_path):
 
     other = JobStore(tmp_path / "jobs")     # a second tool call builds a new store
     with store.heartbeat(job.id, interval=0.05):
-        time.sleep(0.25)
+        # Wait for evidence of a touch instead of assuming the thread was
+        # scheduled within a fixed sleep — that assumption failed on a loaded
+        # macOS runner, where 0.25 s was not enough for a 0.05 s interval.
+        start = job.updated_at
+        deadline = time.time() + 10
+        while time.time() < deadline and store.get(job.id).updated_at == start:
+            time.sleep(0.01)
+        assert store.get(job.id).updated_at > start, "the heartbeat never ran"
+
         assert other.recover_stale(max_age_seconds=0.15) == []
     assert store.get(job.id).status == RUNNING
 
