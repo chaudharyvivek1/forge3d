@@ -169,7 +169,16 @@ def cmd_card(args) -> int:
 def cmd_serve(args) -> int:
     from .server import main as server_main
 
-    sys.argv = ["forge3d-mcp"] + (["--http", str(args.http)] if args.http else [])
+    if not args.http:
+        sys.argv = ["forge3d-mcp"]
+    else:
+        sys.argv = ["forge3d-mcp", "--http", str(args.http)]
+        if args.host:
+            sys.argv += ["--host", args.host]
+        if args.token:
+            sys.argv += ["--token", args.token]
+        if args.allow_unauthenticated:
+            sys.argv.append("--allow-unauthenticated")
     server_main()
     return 0
 
@@ -240,6 +249,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sv = sub.add_parser("serve", help="run the MCP server")
     sv.add_argument("--http", type=int, default=None, help="port; omit for stdio")
+    sv.add_argument("--host", default=None,
+                    help="bind address (default 127.0.0.1; a public host requires a token)")
+    sv.add_argument("--token", default=None,
+                    help="bearer token required by HTTP clients (or set FORGE3D_HTTP_TOKEN)")
+    sv.add_argument("--allow-unauthenticated", action="store_true",
+                    help="permit a public bind with no token — understand the risk first")
     sv.set_defaults(func=cmd_serve)
     return p
 
