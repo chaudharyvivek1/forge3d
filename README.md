@@ -1,7 +1,7 @@
 # forge3d
 
 **A 3D-model toolchain any AI agent can drive.** One MCP server, one agent skill,
-five interchangeable geometry engines, a validation layer that knows what
+six interchangeable geometry engines, a validation layer that knows what
 "correct" means for print vs web vs game, and a Three.js viewer that turns a
 mesh into a single HTML file you can send to anyone.
 
@@ -142,7 +142,7 @@ forge3d render   output/chair.glb
 forge3d viewer   output/chair.glb --out chair.html
 ```
 
-## The five engines
+## The six engines
 
 | Backend | Needs | Best for | Weak at |
 |---|---|---|---|
