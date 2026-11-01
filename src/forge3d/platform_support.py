@@ -337,7 +337,10 @@ def atomic_write(path: str | Path, data: str | bytes) -> Path:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     payload = data.encode("utf-8") if isinstance(data, str) else data
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".forge3d-", suffix=p.suffix or ".tmp")
+    # Suffix `.tmp`, never the target's: a temp file named `...json` matches the
+    # glob that `JobStore.list()` scans, so a concurrent reader could try to parse
+    # a half-written record.
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".forge3d-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(payload)
