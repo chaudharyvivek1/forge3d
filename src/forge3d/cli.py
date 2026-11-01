@@ -77,7 +77,7 @@ def cmd_demo(args) -> int:
     if out.get("viewer"):
         print(f"  viewer     {out['viewer']}")
     print("\nOpen the viewer in a browser — it is one self-contained file.")
-    print("Then try: forge3d create --prompt 'a chair' --backend procedural")
+    print("Then try: forge3d create --shape torus_knot --resolution 128")
     return 0
 
 
@@ -89,8 +89,12 @@ def cmd_providers(args) -> int:
             "configured": [p["name"] for p in providers if p["available"]]})
     if args.check:
         results = provider_registry.check_all(args.check if isinstance(args.check, str) else None)
-        _print({"checks": results})
-        return 0 if any(r.get("ok") for r in results) else 2
+        ready = [r["provider"] for r in results if r.get("ok")]
+        _print({"checks": results, "ready": ready})
+        print(f"  {len(ready)}/{len(results)} provider(s) ready", file=sys.stderr)
+        # Reporting is not a failure. A CI gate should grep `ready`; exiting
+        # non-zero here made a status check look like a crash.
+        return 0
     if not args.quiet:
         print()
         for p in providers:
@@ -137,6 +141,32 @@ def cmd_plan(args) -> int:
 
 
 def cmd_create(args) -> int:
+    # `forge3d create --shape torus_knot` is the path a new user reaches for, and
+    # the demo used to advertise `create --prompt ... --backend procedural`, which
+    # cannot work: that backend needs source code.
+    shape = getattr(args, "shape", None)
+    if shape:
+        from . import server
+
+        params: dict = {}
+        for item in getattr(args, "param", None) or []:
+            if "=" not in item:
+                print(f"  --param expects key=value, got {item!r}", file=sys.stderr)
+                return 2
+            key, _, raw = item.partition("=")
+            try:
+                params[key] = float(raw) if "." in raw else int(raw)
+            except ValueError:
+                params[key] = raw
+        out = server.create_shape(
+            shape=shape, params=params,
+            resolution=int(getattr(args, "resolution", 96)),
+            name=args.name or shape, purpose=args.purpose,
+            render_previews=True, make_viewer=True,
+        )
+        _print(out)
+        return 0 if out.get("ok") else 1
+
     spec = ModelSpec(
         name=args.name or "model",
         prompt=args.prompt or "",
@@ -279,6 +309,11 @@ def build_parser() -> argparse.ArgumentParser:
     create = sub.add_parser("create", help="generate a model")
     add_spec_args(create)
     create.add_argument("--backend", default="auto")
+    create.add_argument("--shape", default=None,
+                        help="build from the equation library instead (see `list_shapes`)")
+    create.add_argument("--param", action="append", metavar="KEY=VALUE",
+                        help="a parameter for --shape, repeatable")
+    create.add_argument("--resolution", type=int, default=96)
     create.add_argument("--source", default=None, help="file with backend source code")
     create.add_argument("--scale-to-spec", action="store_true")
     create.add_argument("--viewer", action="store_true", help="also build the Three.js page")
@@ -331,7 +366,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (meshio.MeshError, FileNotFoundError, NotADirectoryError, IsADirectoryError) as exc:
+        # A mistyped path is a user error, not a crash: print one line, not 30
+        # frames of traceback the user has to read past.
+        print(f"forge3d: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("forge3d: interrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
