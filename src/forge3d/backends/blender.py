@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..platform_support import find_binary, install_hint, run
+from ..config import get_settings
+from ..platform_support import find_binary, install_hint, run, sandbox_command
 from ..spec import ModelSpec
 from .base import Backend, BackendResult, missing_binary
 
@@ -35,6 +36,7 @@ if not os.path.exists(OUT):
 
 class BlenderBackend(Backend):
     name = "blender"
+    executes_user_code = True
     kind = "local"
     requires: tuple[str, ...] = ("blender",)
     capabilities = {
@@ -81,6 +83,8 @@ class BlenderBackend(Backend):
             "-P", str(script_path),
             "--", str(glb_path),
         ]
+        # Blender was the one code-running backend with a timeout but no sandbox.
+        cmd, isolation = sandbox_command(cmd, out_dir, get_settings().sandbox)
         proc = run(cmd, timeout=int(kwargs.get("timeout", 600)))
         if proc.timed_out:
             return BackendResult(ok=False, error="blender timed out", log=proc.output[-2000:])
@@ -94,5 +98,5 @@ class BlenderBackend(Backend):
             path=str(glb_path),
             log=log[-4000:],
             extra_outputs={"bpy": str(script_path)},
-            meta={"engine": "blender", "binary": binary},
+            meta={"engine": "blender", "binary": binary, "isolation": isolation},
         )
