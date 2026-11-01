@@ -104,25 +104,29 @@ class ImageBackend(Backend):
                     "purpose='print')",
             )
 
+        # Cleanup starts here, immediately after resolution succeeded: from this
+        # point the temporary directory is owned by this request and nothing may
+        # escape without removing it. Loading used to sit *before* the try/finally,
+        # so a corrupt or unsupported image leaked the download.
         try:
-            img = self._load_image(image_path)
-        except Exception as exc:  # noqa: BLE001 - reported to the agent
-            return BackendResult(ok=False, error=f"could not read image: {exc}")
+            try:
+                img = self._load_image(image_path)
+            except Exception as exc:  # noqa: BLE001 - reported to the agent
+                return BackendResult(ok=False, error=f"could not read image: {exc}")
 
-        mode = (kwargs.get("mode") or "auto").lower()
-        if mode not in MODES:
-            mode = "auto"
-        resolved = self._resolve_mode(img, mode)
+            mode = (kwargs.get("mode") or "auto").lower()
+            if mode not in MODES:
+                mode = "auto"
+            resolved = self._resolve_mode(img, mode)
 
-        requested_grid = int(kwargs.get("grid") or DEFAULT_GRID)
-        grid = clamp_grid(requested_grid, spec.poly_budget)
+            requested_grid = int(kwargs.get("grid") or DEFAULT_GRID)
+            grid = clamp_grid(requested_grid, spec.poly_budget)
 
-        try:
             return self._build(img, spec, resolved, grid, kwargs, out_dir,
                                requested_grid, image_path)
         finally:
-            # Request-local cleanup. A module-global list of temp dirs meant two
-            # concurrent generations deleted each other's reference image.
+            # Request-local cleanup: only this call's directory. `temp_dir` is None
+            # for a caller-supplied path, so an input file is never deleted.
             if temp_dir is not None:
                 import shutil
 
@@ -200,11 +204,18 @@ class ImageBackend(Backend):
 
     @staticmethod
     def _load_image(path: Path):
+        """Decode an image and release the file handle before returning.
+
+        The context manager matters on Windows: `shutil.rmtree` cannot remove a
+        directory while a handle inside it is open, and an un-closed `Image` keeps
+        one until garbage collection. The returned object is a converted copy, so
+        closing the source is safe.
+        """
         from PIL import Image
 
-        img = Image.open(path)
-        img.load()
-        return img.convert("RGBA")
+        with Image.open(path) as source:
+            source.load()
+            return source.convert("RGBA")
 
     @staticmethod
     def _resolve_mode(img, mode: str) -> str:
