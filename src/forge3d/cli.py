@@ -68,6 +68,7 @@ def cmd_plan(args) -> int:
         dimensions=_dims(args.dims),
         style=args.style or "",
         poly_budget=args.budget,
+        mode=getattr(args, "mode", "auto"),
     )
     picked = backends.resolve_auto(spec, purpose_hint=args.purpose)
     _print(
@@ -91,6 +92,7 @@ def cmd_create(args) -> int:
         dimensions=_dims(args.dims),
         style=args.style or "",
         poly_budget=args.budget,
+        mode=getattr(args, "mode", "auto"),
     )
     source = Path(args.source).read_text(encoding="utf-8", errors="replace") if args.source else None
     out_dir = get_settings().ensure_workdir() / "models" / spec.name
@@ -202,6 +204,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--dims", default=None, help="x=180,y=90,z=75")
         sp.add_argument("--style", default="")
         sp.add_argument("--budget", type=int, default=None)
+        sp.add_argument("--mode", default="auto", choices=["auto", "local", "cloud"],
+                        help="local never calls a paid provider; cloud uses hosted only")
 
     plan = sub.add_parser("plan", help="build a checkable spec from a prompt")
     add_spec_args(plan)
