@@ -84,14 +84,31 @@ class BlenderBackend(Backend):
             "--", str(glb_path),
         ]
         # Blender was the one code-running backend with a timeout but no sandbox.
-        cmd, isolation = sandbox_command(cmd, out_dir, get_settings().sandbox)
-        proc = run(cmd, timeout=int(kwargs.get("timeout", 600)))
+        settings = get_settings()
+        cmd, isolation = sandbox_command(cmd, out_dir, settings.sandbox)
+        proc = run(
+            cmd,
+            # Same budget as the procedural and CadQuery children — 600s here was
+            # inconsistent with FORGE3D_CODE_TIMEOUT everywhere else.
+            timeout=int(kwargs.get("timeout") or settings.code_timeout),
+            cwd=str(out_dir),
+            limits=True,
+            env={"FORGE3D_CODE_TIMEOUT": str(settings.code_timeout),
+                 "FORGE3D_MEM_LIMIT_MB": str(settings.mem_limit_mb)},
+        )
+        # Report what actually happened. A fallback labelled "rlimit" must not
+        # imply limits were applied when the platform cannot apply them.
+        if isolation == "rlimit" and not proc.limits_applied:
+            isolation = "none (resource limits unavailable on this platform)"
         if proc.timed_out:
-            return BackendResult(ok=False, error="blender timed out", log=proc.output[-2000:])
+            return BackendResult(ok=False, error="blender timed out",
+                                 log=proc.output[-2000:],
+                                 meta={"isolation": isolation})
 
         log = proc.output
         if not glb_path.exists():
-            return BackendResult(ok=False, error="blender produced no export", log=log[-6000:])
+            return BackendResult(ok=False, error="blender produced no export",
+                                 log=log[-6000:], meta={"isolation": isolation})
 
         return BackendResult(
             ok=True,
