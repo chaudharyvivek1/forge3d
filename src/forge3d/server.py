@@ -281,18 +281,50 @@ def create_model(
                     f"Waited {settings.queue_wait}s for a free slot; an unbounded queue would "
                     f"hide an overload the client needs to see.",
         }
-    # Heartbeat runs until the job reaches a terminal state, so it also covers
-    # validation and rendering — the window where a slow render used to let
-    # recover_stale() kill a healthy job.
-    store.auto_heartbeat(job.id)
 
+    # The slot covers the WHOLE pipeline: generation, mesh re-open, validation,
+    # previews, viewer and the final job write. It used to be released as soon as
+    # the backend returned, so N callers could each be generating while N more ran
+    # post-processing — more concurrent work than the limit promises.
+    #
+    # One acquire, one release, in `finally` — every exit path (exception, invalid
+    # geometry, unreadable output, success) goes through it exactly once.
+    try:
+        # Heartbeat runs until the job reaches a terminal state, so it covers the
+        # whole pipeline rather than only the backend call.
+        store.auto_heartbeat(job.id)
+        return _run_generation_pipeline(
+            job=job, store=store, backend=backend, spec=spec, out_dir=out_dir,
+            source=source, scale_to_spec=scale_to_spec,
+            render_previews=render_previews, make_viewer=make_viewer,
+        )
+    finally:
+        slots.release()
+
+
+def _run_generation_pipeline(
+    *,
+    job,
+    store: JobStore,
+    backend: str,
+    spec: ModelSpec,
+    out_dir: Path,
+    source: str | None,
+    scale_to_spec: bool,
+    render_previews: bool,
+    make_viewer: bool,
+) -> dict:
+    """Everything between "run the engine" and "return the result".
+
+    Extracted so the concurrency slot can wrap it as a single unit. Every early
+    return below is a normal outcome; the caller's `finally` releases the slot.
+    """
     try:
         used, result = backends.run(backend, spec, out_dir, source=source)
     except Exception as exc:  # never leak a stack trace to the agent
         store.fail(job, str(exc))
-        return {"ok": False, "job_id": job.id, "error": str(exc), "hint": "check the backend name with list_backends"}
-    finally:
-        slots.release()
+        return {"ok": False, "job_id": job.id, "error": str(exc),
+                "hint": "check the backend name with list_backends"}
 
     if not result.ok:
         # An uncertain submission is NOT a failure. Recording it as `failed`
@@ -336,26 +368,40 @@ def create_model(
             path = meshio.export(obj, path)
     except Exception as exc:
         store.fail(job, f"could not re-open output: {exc}")
-        return {"ok": False, "job_id": job.id, "error": f"generated file is unreadable: {exc}"}
+        return {"ok": False, "job_id": job.id,
+                "error": f"generated file is unreadable: {exc}"}
 
-    report = validate.validate(obj, profile=spec.purpose, spec=spec)
+    try:
+        report = validate.validate(obj, profile=spec.purpose, spec=spec)
+    except Exception as exc:  # noqa: BLE001 - a validator bug must not leak a traceback
+        store.fail(job, f"validation failed to run: {exc}")
+        return {"ok": False, "job_id": job.id,
+                "error": f"could not validate the result: {exc}",
+                "hint": "the mesh was generated and is on disk; inspect it directly."}
+
     previews: dict[str, str] = {}
     if render_previews:
-        previews = render.render_views(obj, out_dir / "previews", name=spec.name).get("previews", {})
+        try:
+            previews = render.render_views(obj, out_dir / "previews",
+                                           name=spec.name).get("previews", {})
+        except Exception as exc:  # noqa: BLE001 - previews are a nicety
+            previews = {}
+            job.log = f"{job.log or ''}\npreview rendering failed: {exc}".strip()
 
     html_path = None
     if make_viewer:
         try:
             html_path = str(viewer.build_viewer(path, out_dir / f"{spec.name}.html", spec=spec,
                                                 meta={"validation": report.summary()}))
-        except Exception:
-            html_path = None
+        except Exception as exc:  # noqa: BLE001 - the mesh is the deliverable
+            job.log = f"{job.log or ''}\nviewer generation failed: {exc}".strip()
 
     card = context.model_card(path, spec=spec, previews=previews, include_validation=False)
     card["validation"] = {"ok": report.ok, "summary": report.summary(),
                           "failed": [c.id for c in report.checks if not c.ok]}
 
-    store.finish(job, str(path), log=result.log, meta={"backend": used, "faces": card.get("triangles")})
+    store.finish(job, str(path), log=result.log,
+                 meta={"backend": used, "faces": card.get("triangles")})
 
     return {
         "ok": True,
