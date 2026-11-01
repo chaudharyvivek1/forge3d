@@ -28,10 +28,6 @@ from ..platform_support import TimeoutExceeded, safe_timeout
 from ..spec import ModelSpec
 from .base import Backend, BackendResult
 
-PREAMBLE = """\
-# helpers available in this namespace: trimesh, np, math, box(x,y,z), cyl(r,h), spec
-"""
-
 
 class _Timeout(Exception):
     pass
