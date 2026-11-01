@@ -9,10 +9,13 @@ every generation goes through a job record the agent can poll.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from .platform_support import atomic_write
 
 QUEUED, RUNNING, SUCCEEDED, FAILED = "queued", "running", "succeeded", "failed"
 
@@ -38,6 +41,10 @@ class JobStore:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        # MCP servers call tools from a threadpool, so two jobs can be written
+        # concurrently. A process-wide lock plus atomic replace means a reader
+        # never sees a half-written record and two writers never interleave.
+        self._lock = threading.Lock()
 
     def _path(self, job_id: str) -> Path:
         return self.root / f"{job_id}.json"
@@ -49,7 +56,8 @@ class JobStore:
 
     def save(self, job: Job) -> Job:
         job.updated_at = time.time()
-        self._path(job.id).write_text(json.dumps(job.to_dict(), indent=2), encoding="utf-8")
+        with self._lock:
+            atomic_write(self._path(job.id), json.dumps(job.to_dict(), indent=2))
         return job
 
     def get(self, job_id: str) -> Job | None:
@@ -79,3 +87,21 @@ class JobStore:
         job.status = FAILED
         job.error = error
         return self.save(job)
+
+    def recover_stale(self, max_age_seconds: int = 900) -> list[str]:
+        """Mark jobs orphaned by a restart as failed instead of `running` forever.
+
+        Without this, a process that dies mid-generation leaves a job that looks
+        alive forever, and an agent polling `get_job` waits on something that will
+        never finish. Called at the start of every generation.
+        """
+        recovered = []
+        now = time.time()
+        for job in self.list(limit=200):
+            if job.status in (QUEUED, RUNNING) and (now - job.updated_at) > max_age_seconds:
+                job.status = FAILED
+                job.error = (f"interrupted: no progress for {int(now - job.updated_at)}s "
+                             "(server restarted or crashed mid-generation)")
+                self.save(job)
+                recovered.append(job.id)
+        return recovered
