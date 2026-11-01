@@ -383,10 +383,16 @@ Two things worth knowing before you point this at anything other than your own
 machine:
 
 **Agent code execution.** The `procedural`, `cadquery` and `blender` backends run
-code the agent wrote. `FORGE3D_ALLOW_CODE_EXEC=false` disables that, and
-`FORGE3D_EXEC_MODE=subprocess` runs it in a killable child process with rlimits
-instead of in the server. Neither is a sandbox against a determined attacker —
-for that, use the container and keep the caller trusted.
+code the agent wrote — and all three are now refused centrally when
+`FORGE3D_ALLOW_CODE_EXEC=false`, not just the procedural one.
+`FORGE3D_EXEC_MODE=subprocess` runs them in a killable child with rlimits, and
+`FORGE3D_SANDBOX` wraps that in bubblewrap where available. Neither is a sandbox
+against a determined attacker — for that, use the container and keep the caller
+trusted.
+
+**Remote images** are fetched through a guard that refuses loopback, private and
+link-local addresses (revalidated after every redirect), caps the body size, and
+requires the bytes to decode as an image inside a pixel budget.
 
 **The HTTP transport** requires a bearer token for any non-loopback bind, compares
 it in constant time, and forces subprocess isolation. It does not do TLS, rate
