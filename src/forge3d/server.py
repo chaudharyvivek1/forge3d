@@ -19,9 +19,13 @@ Run:  forge3d-mcp              (stdio, for Claude Desktop / Cursor / any client)
 from __future__ import annotations
 
 import json
+import sys
+import threading
+import time
 from pathlib import Path
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware import Middleware
 
 from . import backends, context, meshio, platform_support, render, repair, validate, viewer
 from . import handoff as handoff_mod
@@ -43,6 +47,55 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+# --- concurrency ---------------------------------------------------------
+# 3D work is CPU-bound. Ten concurrent builds on four cores makes every one of
+# them slow, and a slow build looks like a hung server to a client with a
+# timeout. One semaphore per configured limit, created lazily so tests can change
+# the setting without leaking old slots.
+_SLOT_LOCK = threading.Lock()
+_SLOTS: dict[int, threading.BoundedSemaphore] = {}
+
+
+def _slots(limit: int) -> threading.BoundedSemaphore:
+    with _SLOT_LOCK:
+        return _SLOTS.setdefault(max(1, int(limit)), threading.BoundedSemaphore(max(1, int(limit))))
+
+
+def _log_event(event: dict) -> None:
+    """Structured log line, or nothing, depending on FORGE3D_LOG_JSON."""
+    if not get_settings().log_json:
+        return
+    print(json.dumps({"ts": round(time.time(), 3), **event}), file=sys.stderr, flush=True)
+
+
+class ToolLogger(Middleware):
+    """Timing and outcome for every tool call, as one JSON line each.
+
+    Without this, a production incident has no record of which tool a client
+    hammered or which one silently got slow.
+    """
+
+    async def on_call_tool(self, context, call_next):
+        name = getattr(getattr(context, "message", None), "name", "unknown")
+        started = time.perf_counter()
+        status = "ok"
+        try:
+            return await call_next(context)
+        except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
+            status = f"error:{type(exc).__name__}"
+            raise
+        finally:
+            _log_event({
+                "event": "tool_call",
+                "tool": name,
+                "ms": round((time.perf_counter() - started) * 1000, 1),
+                "status": status,
+            })
+
+
+mcp.add_middleware(ToolLogger())
+
+
 def _store() -> JobStore:
     return JobStore(get_settings().ensure_workdir() / "jobs")
 
@@ -209,11 +262,25 @@ def create_model(
     out_dir = _models_dir() / spec.name / job.id
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    settings = get_settings()
+    slots = _slots(settings.max_concurrent)
+    if not slots.acquire(timeout=settings.queue_wait):
+        store.fail(job, "server busy")
+        return {
+            "ok": False,
+            "job_id": job.id,
+            "error": f"server busy: {settings.max_concurrent} generations already running",
+            "hint": f"retry shortly, or raise FORGE3D_MAX_CONCURRENT / FORGE3D_QUEUE_WAIT. "
+                    f"Waited {settings.queue_wait}s for a free slot; an unbounded queue would "
+                    f"hide an overload the client needs to see.",
+        }
     try:
         used, result = backends.run(backend, spec, out_dir, source=source)
     except Exception as exc:  # never leak a stack trace to the agent
         store.fail(job, str(exc))
         return {"ok": False, "job_id": job.id, "error": str(exc), "hint": "check the backend name with list_backends"}
+    finally:
+        slots.release()
 
     if not result.ok:
         store.fail(job, result.error or "generation failed")
