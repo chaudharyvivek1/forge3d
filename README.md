@@ -151,7 +151,7 @@ forge3d viewer   output/chair.glb --out chair.html
 | `openscad` | `openscad` binary | hard-surface CSG, brackets, enclosures, jigs | sculpting, texturing |
 | `blender` | `blender` binary | bevels, subdivision, materials, rigging, animation | exact mechanical dims |
 | `cadquery` | `pip install cadquery` | manufacturing, STEP deliverables, fillets | organic forms |
-| `hosted` | a text-to-3D service | stylised props, characters, textured meshes fast | exact scale, watertight print geometry |
+| `hosted` | a provider key or `FORGE3D_HOSTED_URL` | stylised props, characters, textured meshes fast | exact scale, watertight print geometry |
 
 `backend="auto"` routes from the spec: `print` → OpenSCAD if present, `cad` →
 CadQuery, `game` → Blender, `web` with references → hosted, otherwise
@@ -177,6 +177,27 @@ A relief costs exactly $$4(g-1)^2 + 8(g-1)$$ triangles at grid $$g$$, and the gr
 is shrunk automatically to fit `poly_budget` *before* generating. Holes in a mask
 survive as real holes. Full detail, including what it will not do:
 [docs/image-to-3d.md](docs/image-to-3d.md).
+
+## Cloud providers
+
+Real adapters for **Meshy**, **Tripo** and **Rodin** behind one job-shaped
+interface, plus the original generic worker — existing `FORGE3D_HOSTED_URL`
+deployments keep working unchanged.
+
+```bash
+forge3d providers              # what is configured here
+forge3d providers --check      # live authenticated request
+```
+
+```python
+create_model(backend="hosted", mode="cloud", prompt="a ceramic teapot")
+```
+
+Every adapter reports `verified` — whether it has been run against a live account.
+Only the generic worker has; the commercial three are written from public docs and
+say so, in the CLI, in `list_providers`, and in the job metadata. `--check` settles
+it in one command. Interface, status normalisation and how to add one:
+[docs/providers.md](docs/providers.md).
 
 ## Make anything from an equation
 
@@ -333,6 +354,7 @@ blocked CDN instead of showing a blank canvas.
 src/forge3d/
   spec.py          the brief as data — purpose, units, dimensions, budget
   backends/        procedural · image · openscad · blender · cadquery · hosted
+  providers/       meshy · tripo · rodin · generic worker (one job-shaped contract)
   geometry/        generators: planets (terrain, craters, PBR bake), surfaces (15 equation families)
   validate.py      profile-based checks, every failure carries a fix hint
   repair.py        merge, drop, fill, re-orient, decimate
@@ -345,10 +367,10 @@ src/forge3d/
   context.py       model cards — the only sanctioned way to describe a mesh
   handoff.py       checklists + multi-agent handoff packets
   jobs.py          durable job records for slow generations
-  server.py        the MCP surface (20 tools)
+  server.py        the MCP surface (21 tools)
   cli.py           same capabilities without an agent
 skill/             agent skill: SKILL.md + references
-docs/              architecture, security, reliability, image-to-3d, geometry, surfaces, platforms,
+docs/              architecture, security, reliability, providers, image-to-3d, geometry, surfaces, platforms,
                    backends, threejs, multi-agent, licensing
 examples/          chair (trimesh), bracket (OpenSCAD), gear (bpy), plate (CadQuery)
 tests/             pytest — unit, platform and regression suites
