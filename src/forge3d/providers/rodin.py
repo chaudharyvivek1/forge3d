@@ -63,7 +63,7 @@ class RodinProvider(GenerationProvider):
             raise ProviderError("rodin needs a prompt or at least one image")
 
         resp = request_with_retries("POST", f"{self.base_url()}/api/v1/rodin",
-                                    attempts=3, json=payload,
+                                    json=payload,
                                     headers=self._headers(), timeout=60)
         self._raise_for_status(resp, "submit")
         data = self._json(resp)
@@ -79,7 +79,7 @@ class RodinProvider(GenerationProvider):
 
     def get_status(self, job_id: str) -> ProviderJob:
         resp = request_with_retries("POST", f"{self.base_url()}/api/v1/status",
-                                    attempts=3, json={"subscription_key": job_id},
+                                    json={"subscription_key": job_id},
                                     headers=self._headers(), timeout=60)
         self._raise_for_status(resp, "status")
         data = self._json(resp)
