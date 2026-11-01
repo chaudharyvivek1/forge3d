@@ -4,6 +4,29 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.5.1] — 2026-11-01
+
+Fixes an external review's P0 finding: the local/cloud guarantee was documented
+but not enforced through every public interface.
+
+### Fixed
+
+- **`spec.mode` was unreachable from every tool.** `_spec()` did not pass it,
+  `plan_model()` and `create_model()` did not accept it, and the CLI had no
+  `--mode` flag. The field existed, the router honoured it, and no caller could
+  set it. All three interfaces now expose it.
+- **An explicitly named backend bypassed the mode check.** `backends.run()` only
+  consulted `resolve_auto()` when the backend was `"auto"`, so
+  `backend="hosted", mode="local"` still made a billable call. Mode is now
+  enforced at the single point every generation passes through, and the refusal
+  explains itself.
+- Server module docstring said "sixteen tools" while the surface had twenty.
+
+### Tests
+
+299 passing (was 291). New `tests/test_mode.py` covers the violation matrix, the
+MCP tools, and the CLI flag.
+
 ## [0.5.0] — 2026-11-01
 
 Parametric surfaces: 15 shape families defined by equations, so an agent can make
