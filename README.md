@@ -395,8 +395,13 @@ link-local addresses (revalidated after every redirect), caps the body size, and
 requires the bytes to decode as an image inside a pixel budget.
 
 **The HTTP transport** requires a bearer token for any non-loopback bind, compares
-it in constant time, and forces subprocess isolation. It does not do TLS, rate
-limiting or per-user identity; put a reverse proxy in front for those.
+it in constant time, forces subprocess isolation, and has an in-process token
+bucket (`FORGE3D_RATE_LIMIT`). That limiter is per-process and in-memory — it is
+not a distributed or billing-grade quota. It does not do TLS or per-user identity;
+put a reverse proxy in front for those.
+
+**A bearer token is not a permission system.** Every authenticated caller shares
+the service identity and can reach every tool. There are no per-user scopes.
 
 Full detail, including the threat model and what is deliberately *not* covered:
 [docs/security.md](docs/security.md).
@@ -414,10 +419,10 @@ Full detail, including the threat model and what is deliberately *not* covered:
   Three.js viewer with an environment map is the better tool.
 - **Licensing.** Output rights differ sharply between hosted services. That is
   your provider's terms, not this repo's. See `docs/licensing.md`.
-- **No provider-specific integrations.** The hosted adapter speaks one documented
-  contract and ships a reference worker (`examples/hosted_worker.py`) you adapt.
-  A "universal" client for Meshy/Tripo/Rodin would be wrong in ways you would
-  only find in production, so it does not pretend to be one.
+- **Provider adapters exist but are not live-verified.** Meshy, Tripo and Rodin
+  have real adapters written from their public docs; only the generic worker has
+  been run against a live endpoint. `list_providers` and `forge3d providers
+  --check` report the difference rather than hiding it.
 - **Subprocess isolation is not a security boundary.** It gives real cancellation
   and resource ceilings; it does not stop a child process reading your files.
 
