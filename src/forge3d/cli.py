@@ -47,6 +47,25 @@ def cmd_backends(_args) -> int:
     return 0
 
 
+def cmd_providers(args) -> int:
+    from .providers import registry as provider_registry
+
+    providers = provider_registry.list_providers()
+    _print({"providers": providers,
+            "configured": [p["name"] for p in providers if p["available"]]})
+    if args.check:
+        results = provider_registry.check_all(args.check if isinstance(args.check, str) else None)
+        _print({"checks": results})
+        return 0 if any(r.get("ok") for r in results) else 2
+    if not args.quiet:
+        print()
+        for p in providers:
+            mark = "configured" if p["available"] else f"needs {p['key_env']}"
+            verified = "verified" if p["verified"] else "UNVERIFIED"
+            print(f"  {p['name']:8} {mark:28} {verified}")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     workdir = Path(args.workdir) if args.workdir else get_settings().ensure_workdir()
     report = platform_support.doctor(workdir)
@@ -190,6 +209,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("backends", help="list geometry engines").set_defaults(func=cmd_backends)
+
+    prov = sub.add_parser("providers", help="list text-to-3D providers and their status")
+    prov.add_argument("--check", nargs="?", const=True, default=False,
+                      help="make a live authenticated request (optionally for one provider)")
+    prov.add_argument("--quiet", action="store_true", help="JSON only")
+    prov.set_defaults(func=cmd_providers)
 
     doc = sub.add_parser("doctor", help="diagnose this machine: engines, packages, workdir")
     doc.add_argument("--workdir", default=None)
