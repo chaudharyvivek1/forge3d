@@ -1,4 +1,4 @@
-"""The MCP surface — one server, sixteen tools, any agent.
+"""The MCP surface — one server, twenty tools, any agent.
 
 Design rules this file follows, because they are what make an MCP server usable
 by a *generic* agent rather than only by its author:
@@ -126,6 +126,7 @@ def _spec(**kwargs) -> ModelSpec:
         constraints=list(kwargs.get("constraints") or []),
         references=list(kwargs.get("references") or []),
         seed=kwargs.get("seed"),
+        mode=kwargs.get("mode") or "auto",
     )
 
 
@@ -176,6 +177,7 @@ def plan_model(
     style: str = "",
     poly_budget: int | None = None,
     references: list[str] | None = None,
+    mode: str = "auto",
 ) -> dict:
     """Turn a vague request into a checkable model spec, before generating anything.
 
@@ -186,7 +188,7 @@ def plan_model(
     """
     spec = _spec(
         prompt=prompt, name=name, purpose=purpose, units=units, dimensions=dimensions,
-        style=style, poly_budget=poly_budget, references=references,
+        style=style, poly_budget=poly_budget, references=references, mode=mode,
     )
     picked = backends.resolve_auto(spec, purpose_hint=purpose)
     backend = backends.get_backend(picked)
@@ -229,6 +231,7 @@ def create_model(
     references: list[str] | None = None,
     materials: list[str] | None = None,
     seed: int | None = None,
+    mode: str = "auto",
     scale_to_spec: bool = False,
     render_previews: bool = True,
     make_viewer: bool = True,
@@ -249,7 +252,7 @@ def create_model(
     spec = _spec(
         prompt=prompt, name=name, purpose=purpose, units=units, dimensions=dimensions,
         style=style, poly_budget=poly_budget, constraints=constraints, references=references,
-        materials=materials, seed=seed,
+        materials=materials, seed=seed, mode=mode,
     )
     store = _store()
     store.recover_stale()
