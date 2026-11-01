@@ -121,7 +121,9 @@ class JobStore:
         """
         with self._lock:
             job = self.get(job_id)
-            if job is None:
+            # A finished job must not be refreshed: touching it after completion
+            # kept `updated_at` moving and made "has this job stopped?" untestable.
+            if job is None or job.status in (SUCCEEDED, FAILED, UNCERTAIN):
                 return
             job.updated_at = time.time()
             atomic_write(self._path(job.id), json.dumps(job.to_dict(), indent=2))
