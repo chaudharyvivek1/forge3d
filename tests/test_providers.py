@@ -225,6 +225,37 @@ def test_generic_worker_async_submit_returns_a_job_id(monkeypatch, fake_http):
     assert job.job_id == "w-1" and job.done is False
 
 
+def test_tripo_progress_is_always_a_percentage(monkeypatch, fake_http):
+    """1% must not become 100% — the old `if progress > 1` guard got exactly 1 wrong."""
+    monkeypatch.setenv("FORGE3D_TRIPO_KEY", "tsk_test")
+    for raw, expected in ((1, 0.01), (50, 0.5), (100, 1.0), (0, 0.0)):
+        fake_http["queue"] = [{"payload": {"code": 0, "data": {
+            "status": "running", "progress": raw}}}]
+        job = TripoProvider().get_status("t-1")
+        assert job.progress == pytest.approx(expected), f"progress {raw} -> {job.progress}"
+
+
+def test_retry_count_comes_from_the_documented_env_var(monkeypatch):
+    """Adapters hardcoded attempts=3 and silently ignored FORGE3D_HOSTED_RETRIES."""
+    from forge3d.providers.base import request_with_retries
+
+    calls = {"n": 0}
+
+    def always_fail(method, url, **kwargs):
+        calls["n"] += 1
+        raise __import__("requests").RequestException("boom")
+
+    monkeypatch.setattr("forge3d.providers.base.requests.request", always_fail)
+    monkeypatch.setattr("forge3d.providers.base.time.sleep", lambda *_: None)
+    monkeypatch.setenv("FORGE3D_HOSTED_RETRIES", "1")
+
+    import requests as _requests
+
+    with pytest.raises(_requests.RequestException):
+        request_with_retries("POST", "http://x")
+    assert calls["n"] == 1, "FORGE3D_HOSTED_RETRIES=1 should mean a single attempt"
+
+
 # --- registry ------------------------------------------------------------
 def test_registry_lists_every_provider_with_verification_state():
     entries = {p["name"]: p for p in registry.list_providers()}
@@ -251,6 +282,14 @@ def test_registry_explains_what_to_configure(monkeypatch):
         registry.resolve()
     message = str(exc.value)
     assert "FORGE3D_MESHY_KEY" in message and "FORGE3D_HOSTED_URL" in message
+
+
+def test_check_all_with_an_unknown_name_reports_instead_of_raising():
+    """`forge3d providers --check bogus` must print an error, not a traceback."""
+    results = registry.check_all("bogus")
+    assert len(results) == 1
+    assert results[0]["ok"] is False
+    assert "unknown provider" in results[0]["detail"]
 
 
 def test_registry_auto_prefers_a_configured_commercial_provider(monkeypatch):
