@@ -175,15 +175,31 @@ implementation, and the one this repo shipped — is a server-side request forge
 primitive and a memory-exhaustion bug. `netguard.py` now enforces:
 
 - **scheme**: http/https only;
-- **address**: every resolved IP is checked against loopback, private, link-local,
-  reserved and multicast ranges, **after every redirect hop** (a public host that
-  302s to `127.0.0.1` is refused);
+- **address pinning**: the validated IP is the IP that is dialled, with the
+  hostname kept for TLS verification — resolving a name and then handing the name
+  to an HTTP client is a time-of-check/time-of-use hole (DNS rebinding);
+- **address**: an address is allowed only if it is **globally routable**
+  (`is_global`). That is a positive rule rather than a blocklist, because a
+  blocklist misses ranges like `100.64.0.0/10` (carrier-grade NAT), which is
+  neither `is_private` nor `is_reserved`. Checked after **every redirect hop**;
 - **size**: streamed with a hard byte ceiling (`FORGE3D_MAX_DOWNLOAD_MB` applies to
   provider downloads; the image path caps at 25 MiB);
 - **content**: the declared type must be an image, the bytes must decode, and the
   pixel count must stay inside a budget so a decompression bomb is refused.
 
 A refusal names the reason and suggests passing a local path instead.
+
+**Provider asset downloads go through the same guard.** A provider — or a
+compromised generic worker — can return any URL it likes, including
+`http://127.0.0.1:9200/`. Size caps and destination checks solve different
+problems, so both apply: `FORGE3D_MAX_DOWNLOAD_MB` bounds the bytes and the guard
+bounds the destination, with an optional
+`FORGE3D_TRUSTED_DOWNLOAD_HOSTS=cdn.meshy.ai,...` allowlist.
+
+**Proxies are the honest caveat.** An HTTP proxy performs its own DNS resolution,
+so IP pinning cannot apply through one. Proxied fetches are still destination
+-checked and are marked `proxied=True`; `FORGE3D_ALLOW_PROXY_FETCH=false` refuses
+them outright.
 
 ## Paid submissions are not retried blindly
 
@@ -192,8 +208,11 @@ buy a second generation. Submission therefore:
 
 - sends an `Idempotency-Key` header (providers that support it will dedupe);
 - is **never** retried after an ambiguous timeout or a 5xx;
-- raises `AmbiguousSubmission` carrying that key, which the backend reports as
-  `status: uncertain` with "do not retry, reconcile first".
+- raises `AmbiguousSubmission` carrying that key — including on a **5xx**, which
+  may mean "created, then failed to answer";
+- the backend reports `status: uncertain`, the job store persists that state, and
+  `create_model` returns it with the key. It is deliberately *not* `failed`:
+  retrying a failed job is normal, retrying an uncertain one costs money.
 
 Ordinary GETs are still retried with jittered backoff.
 
