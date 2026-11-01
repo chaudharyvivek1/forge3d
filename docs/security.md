@@ -39,3 +39,99 @@ permissions.
 | `auto` (default) | `inprocess` for stdio, `subprocess` for HTTP | as above | — |
 
 `inprocess` is the default for stdio because that is the "I started this server
+for my own agent" case, where a second of startup per generation is pure cost.
+
+`subprocess` mode runs `python -m forge3d.sandbox_runner`, which:
+
+- applies `RLIMIT_CPU` (from `FORGE3D_CODE_TIMEOUT`) and `RLIMIT_CORE=0`;
+- applies `RLIMIT_AS` when `FORGE3D_MEM_LIMIT_MB` is set (default `0` = off);
+- writes the mesh to a path the parent gave it, and nothing else is trusted —
+  not stdout, not the exit code alone;
+- dies with a `SIGKILL` from the parent when the wall clock runs out.
+
+**What `subprocess` still does not do:** it is not a security boundary against a
+determined attacker. A child process can still read files the user can read, open
+sockets, and `fork`. rlimits bound CPU, address space and core dumps, not
+syscalls. For genuine containment you need a container, a seccomp/landlock
+profile, or a dedicated sandbox runtime — which is why the Dockerfile runs as
+non-root and why HTTP mode forces subprocess isolation rather than claiming to be
+safe on its own.
+
+### 3. The recommendation
+
+- Local stdio server for your own agent → defaults are fine.
+- Shared or remote → **run it in a container, set a token, keep
+  `FORGE3D_ALLOW_CODE_EXEC=false` unless the caller is trusted**, and put it
+  behind a reverse proxy that terminates TLS.
+- Never expose the procedural backend to anonymous internet users. No setting in
+  this repository makes that safe.
+
+## HTTP transport
+
+`forge3d-mcp --http <port>` used to bind `0.0.0.0` with no authentication. It now:
+
+1. **binds `127.0.0.1` by default** — unreachable from the network unless you ask;
+2. **refuses a public bind without a token**, exiting with a clear message;
+3. **requires `Authorization: Bearer <token>`** on every request when a token is
+   set, compared with `hmac.compare_digest` so the check is constant-time;
+4. **leaves `/health` unauthenticated** so a load balancer can probe it;
+5. **forces `subprocess` exec mode**, because an HTTP caller is not assumed
+   trustworthy.
+
+```bash
+# local only, no auth needed
+forge3d-mcp --http 8000
+
+# reachable on the network, authenticated
+FORGE3D_HTTP_TOKEN=$(openssl rand -hex 32) forge3d-mcp --http 8000 --host 0.0.0.0
+
+# you have been warned
+forge3d-mcp --http 8000 --host 0.0.0.0 --allow-unauthenticated
+```
+
+The token is a shared secret, not a user system. There are no per-user
+identities, no scopes, no audit log of who called what. If you need those, put an
+OAuth proxy in front and keep this server on loopback behind it.
+
+**Not implemented, and you should know it:** TLS termination, rate limiting, CORS
+policy beyond fastmcp's defaults, and request-size limits. Use a reverse proxy
+(nginx, Caddy, Traefik) for all four.
+
+## Filesystem
+
+- Tools write only under `FORGE3D_WORKDIR` (default `.forge3d/`), except when you
+  pass an explicit `out_path`/`out_html` — those are honoured verbatim, so do not
+  pass agent-chosen absolute paths from untrusted input.
+- Model names are slugified: path separators, control characters and `..` are
+  stripped, and Windows device names (`con`, `aux`, `com1`…) are suffixed. This is
+  a traversal guard, not a permission system.
+- Job records and generated files are written atomically (temp file +
+  `os.replace`), so a crash cannot leave a half-written mesh that later validates
+  as a corrupt one.
+- Each generation writes to `models/<name>/<job-id>/`, so two concurrent runs
+  cannot overwrite each other's output.
+
+## Secrets
+
+`doctor` reports whether an environment variable is **set**, never its value, so
+`FORGE3D_HOSTED_KEY` and `FORGE3D_HTTP_TOKEN` are not echoed into an agent's
+context. Provider keys stay in the worker process; forge3d only sends the bearer
+token you configured.
+
+## Supply chain
+
+- Dependencies are ordinary PyPI packages: `trimesh`, `numpy`, `scipy`,
+  `fastmcp`, `requests`, `pillow`, plus optional `matplotlib`, `cadquery`,
+  `uvicorn`.
+- Generated HTML loads three.js from `unpkg.com` by default. That is a third-party
+  script in a page you may hand to a client — for anything sensitive, mirror three
+  locally and set `FORGE3D_THREE_URL`, or use the `forge3d-viewer` custom element
+  with your own bundler.
+- The viewer escapes model names and inline JSON, so a hostile model name cannot
+  break out of the page's script element and execute in the browser.
+
+## Reporting
+
+This is a personal open-source project, not a product with an SLA. If you find a security problem, open an issue that describes the impact without a
+working reproduction, or contact the maintainer directly for anything you would
+rather not publish.
