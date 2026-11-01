@@ -147,6 +147,7 @@ forge3d viewer   output/chair.glb --out chair.html
 | Backend | Needs | Best for | Weak at |
 |---|---|---|---|
 | `procedural` | nothing (trimesh) | precise dimensions, repeated structure, editable output, offline | organic forms |
+| `image` | nothing (PIL) | real geometry from a real image: relief plaques, lithophanes, extruded logos with holes | reconstructing what the photo does not show |
 | `openscad` | `openscad` binary | hard-surface CSG, brackets, enclosures, jigs | sculpting, texturing |
 | `blender` | `blender` binary | bevels, subdivision, materials, rigging, animation | exact mechanical dims |
 | `cadquery` | `pip install cadquery` | manufacturing, STEP deliverables, fillets | organic forms |
@@ -156,6 +157,43 @@ forge3d viewer   output/chair.glb --out chair.html
 CadQuery, `game` → Blender, `web` with references → hosted, otherwise
 procedural. The routing table is data (`backends/registry.py`), so it is
 testable and easy to change.
+
+## Image to 3D
+
+Two different things get called "image to 3D", and conflating them is how a demo
+never ships. **Reconstruction** (infer the unseen side of an object) needs a
+neural model and a GPU — route that to `backend="hosted"`. **Derivation** —
+computing real geometry from pixels — is the `image` backend, and it is
+deterministic, needs no GPU, and produces a watertight solid:
+
+```bash
+forge3d create --name plaque --purpose print --backend image \
+    --source portrait.jpg --dims x=100,y=75,z=8      # relief / lithophane
+forge3d create --name sign  --purpose print --backend image \
+    --source logo.png --dims x=80,y=80,z=4           # extruded silhouette
+```
+
+A relief costs exactly $$4(g-1)^2 + 8(g-1)$$ triangles at grid $$g$$, and the grid
+is shrunk automatically to fit `poly_budget` *before* generating. Holes in a mask
+survive as real holes. Full detail, including what it will not do:
+[docs/image-to-3d.md](docs/image-to-3d.md).
+
+## Production behaviour
+
+- **`GET /health`** — no token needed, reports version, uptime, exec mode,
+  sandbox in force, job counts.
+- **Concurrency** — `FORGE3D_MAX_CONCURRENT` (default 2) with a bounded queue
+  (`FORGE3D_QUEUE_WAIT`, default 30 s), then an honest "server busy" rather than
+  a silent wait.
+- **Rate limiting** — `FORGE3D_RATE_LIMIT` per token/IP, `429` + `Retry-After`.
+- **Retries** — hosted calls back off exponentially with jitter on 5xx and
+  connection errors, never on 4xx.
+- **Logs** — `FORGE3D_LOG_JSON=1` gives one JSON object per tool call and per
+  HTTP request.
+- **Job recovery** — atomic records, job-scoped output dirs, and orphaned jobs
+  marked `interrupted` on restart.
+
+Full detail, including what is *not* handled: [docs/reliability.md](docs/reliability.md).
 
 ## Three.js
 
@@ -245,14 +283,14 @@ blocked CDN instead of showing a blank canvas.
 ```
 src/forge3d/
   spec.py          the brief as data — purpose, units, dimensions, budget
-  backends/        procedural · openscad · blender · cadquery · hosted
+  backends/        procedural · image · openscad · blender · cadquery · hosted
   validate.py      profile-based checks, every failure carries a fix hint
   repair.py        merge, drop, fill, re-orient, decimate
   render.py        CPU previews (matplotlib) — works headless, no GPU
   viewer.py        single-file Three.js page
   viewer_assets/   template.html + forge3d-viewer.js custom element
   platform_support.py  binary discovery, UTF-8 subprocess, thread-safe timeouts, doctor
-  http_server.py   HTTP transport: loopback default, bearer auth, bind policy
+  http_server.py   HTTP transport: loopback default, bearer auth, health, rate limit
   sandbox_runner.py  the child process for FORGE3D_EXEC_MODE=subprocess
   context.py       model cards — the only sanctioned way to describe a mesh
   handoff.py       checklists + multi-agent handoff packets
@@ -260,7 +298,8 @@ src/forge3d/
   server.py        the MCP surface (16 tools)
   cli.py           same capabilities without an agent
 skill/             agent skill: SKILL.md + references
-docs/              architecture, security, platforms, backends, threejs, multi-agent, licensing
+docs/              architecture, security, reliability, image-to-3d, platforms,
+                   backends, threejs, multi-agent, licensing
 examples/          chair (trimesh), bracket (OpenSCAD), gear (bpy), plate (CadQuery)
 tests/             pytest — unit, platform and regression suites
 Dockerfile         CPU-only image, non-root, /work volume
