@@ -19,6 +19,9 @@ from pathlib import Path
 from .platform_support import atomic_write
 
 QUEUED, RUNNING, SUCCEEDED, FAILED = "queued", "running", "succeeded", "failed"
+#: The work may or may not exist remotely. Distinct from `failed` on purpose:
+#: retrying a `failed` job is normal, retrying an `uncertain` one costs money.
+UNCERTAIN = "uncertain"
 
 # One lock for the whole process, not one per store instance. Each `_store()`
 # call builds a new JobStore, so a per-instance lock serialised nothing between
@@ -108,6 +111,29 @@ class JobStore:
                 return
             job.updated_at = time.time()
             atomic_write(self._path(job.id), json.dumps(job.to_dict(), indent=2))
+
+    def auto_heartbeat(self, job_id: str, interval: float = 20.0) -> None:
+        """Keep a job fresh until it reaches a terminal state, then stop.
+
+        Self-terminating on purpose: it covers generation *and* the validation and
+        rendering that follow, which the old `with heartbeat()` block did not.
+        """
+        def beat() -> None:
+            while True:
+                time.sleep(interval)
+                try:
+                    job = self.get(job_id)
+                except Exception:  # noqa: BLE001
+                    return
+                if job is None or job.status in (SUCCEEDED, FAILED, UNCERTAIN):
+                    return
+                try:
+                    self.touch(job_id)
+                except Exception:  # noqa: BLE001
+                    return
+
+        threading.Thread(target=beat, name=f"auto-heartbeat-{job_id}",
+                         daemon=True).start()
 
     @contextlib.contextmanager
     def heartbeat(self, job_id: str, interval: float = 30.0):
