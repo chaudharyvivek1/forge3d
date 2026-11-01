@@ -44,6 +44,8 @@ Let `backend="auto"` route unless you have a reason. Reasons to override:
 - STEP file, manufacturing → `cadquery`
 - textured props fast, no scale requirement → `hosted`
 - nothing installed / offline / must be editable → `procedural`
+- the user supplies a photo or logo and wants it *made* → `image`
+  (relief or silhouette; real geometry, but it cannot invent the unseen side)
 
 Read the result:
 - `ok: false` → read `log`, fix the **source**, retry the same spec. Do not
