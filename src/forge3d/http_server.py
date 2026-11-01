@@ -100,9 +100,12 @@ def parse_http_args(argv: list[str]) -> HttpConfig:
     allowed = value_after("--allowed-hosts")
     if allowed:
         cfg.allowed_hosts = [h.strip() for h in allowed.split(",") if h.strip()]
-    elif cfg.is_public:
-        # DNS-rebinding protection: only answer to the names you meant to serve.
-        cfg.allowed_hosts = ["*"]
+    # Deliberately NOT defaulting to ["*"] on a public bind: a wildcard accepts
+    # every Host header, which is the DNS-rebinding case the check exists to
+    # stop. Pass --allowed-hosts your.domain to enable it.
+    elif cfg.is_public and os.environ.get("FORGE3D_HTTP_ALLOWED_HOSTS"):
+        cfg.allowed_hosts = [h.strip() for h in
+                             os.environ["FORGE3D_HTTP_ALLOWED_HOSTS"].split(",") if h.strip()]
     return cfg
 
 
