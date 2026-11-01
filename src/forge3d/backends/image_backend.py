@@ -28,21 +28,6 @@ import trimesh
 from ..spec import ModelSpec
 from .base import Backend, BackendResult
 
-_TEMP_DIRS: list[Path] = []
-
-
-def _cleanup_temp() -> None:
-    """Remove reference images downloaded for this build.
-
-    Without this every remote-image generation left a directory behind, so a
-    long-running server accumulated them without bound.
-    """
-    import shutil
-
-    while _TEMP_DIRS:
-        path = _TEMP_DIRS.pop()
-        shutil.rmtree(path, ignore_errors=True)
-
 
 class ImageFetchRefused(RuntimeError):
     """A remote image was refused by the URL guard, with a reason."""
@@ -101,7 +86,7 @@ class ImageBackend(Backend):
             )
 
         try:
-            image_path = self._resolve_image(spec, source)
+            image_path, temp_dir = self._resolve_image(spec, source)
         except ImageFetchRefused as exc:
             return BackendResult(
                 ok=False,
@@ -136,7 +121,12 @@ class ImageBackend(Backend):
             return self._build(img, spec, resolved, grid, kwargs, out_dir,
                                requested_grid, image_path)
         finally:
-            _cleanup_temp()
+            # Request-local cleanup. A module-global list of temp dirs meant two
+            # concurrent generations deleted each other's reference image.
+            if temp_dir is not None:
+                import shutil
+
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _build(self, img, spec, resolved, grid, kwargs, out_dir,
                requested_grid, image_path):
@@ -185,10 +175,11 @@ class ImageBackend(Backend):
 
     # -- input -----------------------------------------------------------
     @staticmethod
-    def _resolve_image(spec: ModelSpec, source: str | None) -> Path | None:
+    def _resolve_image(spec: ModelSpec, source: str | None
+                       ) -> tuple[Path | None, Path | None]:
         candidate = source or (spec.references[0] if spec.references else None)
         if not candidate:
-            return None
+            return None, None
         if str(candidate).startswith(("http://", "https://")):
             # Guarded fetch: SSRF checks, redirect revalidation, byte ceiling and
             # a real image decode. `requests.get(url)` + `.content` — the obvious
@@ -199,14 +190,13 @@ class ImageBackend(Backend):
 
             try:
                 tmp_dir = Path(tempfile.mkdtemp(prefix="forge3d-image-"))
-                _TEMP_DIRS.append(tmp_dir)
-                return fetch_image(str(candidate), tmp_dir / "input.png")
+                return fetch_image(str(candidate), tmp_dir / "input.png"), tmp_dir
             except UnsafeURLError as exc:
                 raise ImageFetchRefused(str(exc)) from exc
             except Exception as exc:  # noqa: BLE001
                 raise ImageFetchRefused(f"could not fetch {candidate}: {exc}") from exc
         p = Path(candidate).expanduser()
-        return p if p.is_file() else None
+        return (p, None) if p.is_file() else (None, None)
 
     @staticmethod
     def _load_image(path: Path):
