@@ -9,6 +9,7 @@ The agent's code must assign a CadQuery Workplane or Shape to `result`.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -21,16 +22,22 @@ RUNNER = """\
 import sys
 from pathlib import Path
 
-src_path, out_step, out_stl, tolerance = sys.argv[1:5]
+src_path, out_step, out_stl, tolerance, spec_json = sys.argv[1:6]
+
+import json
 
 import cadquery as cq
+from forge3d.spec import ModelSpec
 from forge3d.sandbox_runner import apply_limits
 
 import os
 limits = apply_limits(int(os.environ.get("FORGE3D_MEM_LIMIT_MB", "0")))
 print("forge3d-runner: limits:", limits, file=sys.stderr)
 
-namespace = {"cq": cq, "cadquery": cq, "__name__": "forge3d_cad"}
+# `spec` is available in-process too; leaving it out here made a source file
+# work in one mode and fail in the other.
+spec = ModelSpec.from_dict(json.loads(spec_json))
+namespace = {"cq": cq, "cadquery": cq, "spec": spec, "__name__": "forge3d_cad"}
 exec(compile(Path(src_path).read_text(encoding="utf-8"), "<forge3d-cadquery>", "exec"), namespace)
 
 result = namespace.get("result")
@@ -129,7 +136,8 @@ class CadQueryBackend(Backend):
         atomic_write(code_path, source)
 
         cmd = [sys.executable, str(script_path), str(code_path),
-               str(step_path), str(stl_path), str(float(tolerance))]
+               str(step_path), str(stl_path), str(float(tolerance)),
+               json.dumps(spec.to_dict())]
         cmd, isolation = sandbox_command(cmd, out_dir, settings.sandbox)
         proc = run(cmd, timeout=settings.code_timeout, cwd=str(out_dir),
                    env={"FORGE3D_CODE_TIMEOUT": str(settings.code_timeout),
@@ -141,11 +149,17 @@ class CadQueryBackend(Backend):
                 error=f"cadquery code exceeded {settings.code_timeout}s and was killed",
                 log=(proc.output or "")[-4000:],
             )
-        if not step_path.exists():
+        # Every required output, not just the first: STEP succeeding while STL
+        # failed used to be reported as success with a path that did not exist.
+        missing = [p.name for p in (step_path, stl_path) if not p.exists()]
+        if missing:
             from .procedural import _describe_exit
 
-            return BackendResult(ok=False, error=_describe_exit(proc.returncode),
-                                 log=(proc.output or "")[-4000:])
+            return BackendResult(
+                ok=False,
+                error=f"{_describe_exit(proc.returncode)} (missing {', '.join(missing)})",
+                log=(proc.output or "")[-4000:],
+            )
 
         return BackendResult(
             ok=True,
