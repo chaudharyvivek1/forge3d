@@ -22,6 +22,10 @@ real races fixed, and the CI failure caused by my own environment-dependent test
   `os.replace` then made `stat()` raise `FileNotFoundError` mid-sort, taking down
   the whole `create_model` call — reproduced with three parallel generations.
   Temp files now use `.tmp`, and the scan skips files that vanish.
+- **A heartbeat refreshed finished jobs.** `touch()` wrote a new timestamp for any
+  job, including one already `succeeded`, so "has this job stopped?" was
+  unanswerable and the test for it was racy on macOS. `touch()` now ignores
+  terminal jobs.
 - The concurrency slot was already released in a `finally`; a test now pins that,
   because a leaked slot wedges the server after a single backend crash.
 
