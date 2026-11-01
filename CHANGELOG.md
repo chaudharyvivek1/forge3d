@@ -4,6 +4,45 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.6.1] — 2026-11-01
+
+Documentation and code audit. Five stale claims in the docs and four real code
+defects, all fixed.
+
+### Fixed — code
+
+- **`forge3d providers --check <unknown>` crashed** with a raw `KeyError`
+  traceback. It now reports the failure and the valid names, like every other
+  bad-input path in the CLI.
+- **Tripo progress was wrong at exactly 1%.** The guard `progress / 100 if
+  progress > 1 else progress` turned a reported 1% into 100%. Progress is now
+  always treated as a 0-100 percentage, clamped.
+- **`FORGE3D_HOSTED_RETRIES` was silently ignored.** The adapters hardcoded
+  `attempts=3`, so the documented setting did nothing. `request_with_retries`
+  now resolves the count from the env var when none is passed.
+- Dead `PREAMBLE` constant removed from the procedural backend.
+
+### Fixed — documentation
+
+- `README.md` said "five interchangeable geometry engines" (and headed the table
+  "The five engines") while listing six.
+- `docs/architecture.md` said "MCP: 16 tools" against an actual 21.
+- `.env.example` had no provider variables at all — `FORGE3D_PROVIDER` and the
+  three key variables were undocumented.
+- `docs/platforms.md` support matrix was missing the `image` backend and did not
+  mention that the `hosted` row covers Meshy/Tripo/Rodin keys.
+
+### Verified
+
+- All 34 modules import cleanly; every internal markdown link resolves; every
+  `FORGE3D_*` variable named in the docs exists in code (the one exception,
+  `FORGE3D_LUMA_KEY`, is a deliberate example of writing a new adapter).
+
+### Tests
+
+345 passing (was 342). Adds the retry-count regression and the unknown-provider
+report.
+
 ## [0.6.0] — 2026-11-01
 
 Provider adapters: real integrations for Meshy, Tripo and Rodin behind one
