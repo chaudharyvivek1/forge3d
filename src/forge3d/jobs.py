@@ -8,6 +8,7 @@ every generation goes through a job record the agent can poll.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import time
@@ -18,6 +19,11 @@ from pathlib import Path
 from .platform_support import atomic_write
 
 QUEUED, RUNNING, SUCCEEDED, FAILED = "queued", "running", "succeeded", "failed"
+
+# One lock for the whole process, not one per store instance. Each `_store()`
+# call builds a new JobStore, so a per-instance lock serialised nothing between
+# concurrent tool calls — the comment claimed process-wide safety it did not have.
+_PROCESS_LOCK = threading.Lock()
 
 
 @dataclass
@@ -42,9 +48,10 @@ class JobStore:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         # MCP servers call tools from a threadpool, so two jobs can be written
-        # concurrently. A process-wide lock plus atomic replace means a reader
-        # never sees a half-written record and two writers never interleave.
-        self._lock = threading.Lock()
+        # concurrently. The lock is module-level (see _PROCESS_LOCK) so it is
+        # shared by every store instance; atomic replace means a reader never
+        # sees a half-written record.
+        self._lock = _PROCESS_LOCK
 
     def _path(self, job_id: str) -> Path:
         return self.root / f"{job_id}.json"
@@ -87,6 +94,40 @@ class JobStore:
         job.status = FAILED
         job.error = error
         return self.save(job)
+
+    def touch(self, job_id: str) -> None:
+        """Refresh a job's timestamp without disturbing its status.
+
+        A long generation writes nothing for minutes, so `recover_stale` would
+        eventually mark a perfectly healthy job as interrupted. This is the
+        heartbeat that prevents it.
+        """
+        with self._lock:
+            job = self.get(job_id)
+            if job is None:
+                return
+            job.updated_at = time.time()
+            atomic_write(self._path(job.id), json.dumps(job.to_dict(), indent=2))
+
+    @contextlib.contextmanager
+    def heartbeat(self, job_id: str, interval: float = 30.0):
+        """Keep `job_id` fresh while a slow operation runs."""
+        stop = threading.Event()
+
+        def beat() -> None:
+            while not stop.wait(interval):
+                try:
+                    self.touch(job_id)
+                except Exception:  # noqa: BLE001 - a heartbeat must never break a job
+                    return
+
+        thread = threading.Thread(target=beat, name=f"heartbeat-{job_id}", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join(timeout=2)
 
     def recover_stale(self, max_age_seconds: int = 900) -> list[str]:
         """Mark jobs orphaned by a restart as failed instead of `running` forever.
