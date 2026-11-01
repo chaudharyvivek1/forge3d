@@ -4,6 +4,55 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.6.7] — 2026-11-01
+
+Usability pass, from running the tool the way a new user would rather than reading
+the code. Four defects, one of them in our own instructions.
+
+### Fixed — `forge3d demo` recommended a command that cannot work
+
+It printed "try `forge3d create --prompt 'a chair' --backend procedural`". That
+backend needs source code, so the first command a new user runs after the demo
+failed. `create` now takes `--shape` (and repeatable `--param KEY=VALUE`), and the
+hint points at a command that works.
+
+### Fixed — a catalogue entry crashed `create_shape`
+
+`list_shapes()` returns catalogue entries, so the obvious copy-paste —
+`create_shape(shape=entry)` — died with
+`AttributeError: 'dict' object has no attribute 'strip'`. It now accepts the entry,
+uses its `name`, and merges its default `params` (an explicit `params=` still
+wins). A non-string, non-entry value returns a clean error naming the fix.
+
+### Fixed — a mistyped path printed a traceback
+
+`forge3d validate /tmp/nope.glb` and an unsupported extension both dumped a stack
+trace. The CLI now catches `MeshError` and the filesystem errors and prints one
+line: `forge3d: no such file: /tmp/nope.glb`.
+
+### Fixed — `providers --check` exited non-zero when nothing was configured
+
+A status check that fails looks like a crash. It now reports
+`N/M provider(s) ready` and exits 0; a CI gate should read the `ready` array.
+
+### Added — `python -m forge3d`
+
+There was no `__main__.py`, so `python -m forge3d` failed with "No module named
+forge3d.__main__" — the first thing to try when the console script is not on PATH.
+
+### Added — automated PyPI publishing
+
+`.github/workflows/release.yml` builds, runs `twine check`, installs the wheel in a
+clean venv and smoke-tests it, then publishes via PyPI **trusted publishing** on a
+`v*` tag. No long-lived token. See the workflow header for the one-time PyPI setup.
+
+### Tests
+
+459 passing (was 445). New `tests/test_cli_ux.py` (14) covers the catalogue
+round-trip for every family, `create --shape`, the usage error for a malformed
+`--param`, no-traceback behaviour for bad paths, the `--check` exit code, and the
+demo hint naming a command that works.
+
 ## [0.6.6] — 2026-11-01
 
 Output-path confinement. Three bugs found by running the tools, all reachable from
