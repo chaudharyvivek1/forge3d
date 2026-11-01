@@ -22,6 +22,7 @@ import json
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -625,6 +626,113 @@ def make_scene_viewer(
             "GLBs and embed the forge3d-viewer custom element instead."
         )
     return result
+
+
+@mcp.tool
+def list_shapes() -> dict:
+    """Catalogue of maths-defined shapes, with the equation and parameters for each.
+
+    Call this before `create_shape`. Every entry states whether it is a closed
+    solid (safe to print) or an open surface (visual only), and what each
+    parameter does — so you can pick a family instead of writing vertex loops.
+    """
+    from .geometry.surfaces import list_shapes as _catalogue
+
+    entries = _catalogue()
+    return {
+        "ok": True,
+        "count": len(entries),
+        "shapes": entries,
+        "hint": "create_shape(shape='supershape', params={'m': 6, 'n1': 0.3})",
+    }
+
+
+@mcp.tool
+def create_shape(
+    shape: str = "supershape",
+    params: dict | None = None,
+    resolution: int = 96,
+    name: str | None = None,
+    purpose: str = "game",
+    poly_budget: int | None = None,
+    export_format: str = "glb",
+    render_previews: bool = True,
+    make_viewer: bool = True,
+) -> dict:
+    """Build a shape from a mathematical equation and export it to any mesh format.
+
+    Pick a family with `list_shapes`, then pass the numbers. Everything is
+    deterministic: the same shape and params give the same mesh every time.
+
+    resolution controls detail (12-512). It is the one knob you usually need —
+    raise it for a hero asset, lower it for a game prop or a phone scene.
+
+    export_format: glb (default, web), stl (print), obj, ply, off, gltf, dae.
+    GLB and STL are always written; export_format adds one more.
+
+    Shapes marked `closed: false` (mobius, helicoid, catenoid) are open surfaces —
+    visually correct, but not printable solids. `validate_model` will say so.
+    """
+    from .geometry.surfaces import build_shape
+
+    try:
+        mesh = build_shape(shape, params or {}, resolution=resolution)
+    except KeyError as exc:
+        return {"ok": False, "error": str(exc),
+                "hint": "call list_shapes for the catalogue and their parameters"}
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return {"ok": False, "error": f"{shape} failed to build: {exc}"}
+
+    label = name or f"{shape}"
+    spec = ModelSpec(name=label, purpose=purpose, poly_budget=poly_budget, mode="local")
+    out_dir = _models_dir() / spec.name / uuid.uuid4().hex[:12]
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    glb = out_dir / f"{spec.name}.glb"
+    stl = out_dir / f"{spec.name}.stl"
+    mesh.export(str(glb))
+    mesh.export(str(stl))
+
+    extras: dict[str, str] = {}
+    fmt = (export_format or "glb").lstrip(".").lower()
+    if fmt not in ("glb", "stl"):
+        try:
+            extras[fmt] = str(meshio.export(mesh, out_dir / f"{spec.name}.{fmt}"))
+        except Exception as exc:  # noqa: BLE001
+            extras["error"] = f"{fmt} export failed: {exc}"
+
+    report = validate.validate(mesh, profile=spec.purpose, spec=spec)
+
+    previews: dict[str, str] = {}
+    if render_previews:
+        previews = render.render_views(mesh, out_dir / "previews", name=spec.name,
+                                       views=("iso", "front")).get("previews", {})
+
+    html_path = None
+    if make_viewer:
+        try:
+            html_path = str(viewer.build_viewer(glb, out_dir / f"{spec.name}.html", spec=spec))
+        except Exception:
+            html_path = None
+
+    return {
+        "ok": True,
+        "shape": shape,
+        "params": mesh.metadata.get("params", {}),
+        "path": str(glb),
+        "stl": str(stl),
+        "extra_formats": extras,
+        "viewer": html_path,
+        "previews": previews,
+        "card": {"triangles": int(len(mesh.faces)),
+                 "extents": [round(float(e), 3) for e in mesh.extents],
+                 "watertight": bool(mesh.is_watertight)},
+        "validation": {"ok": report.ok, "summary": report.summary(),
+                       "failed": [c.id for c in report.checks if not c.ok]},
+        "next": ("ship it" if report.ok
+                 else "the shape is fine but not a closed solid — fine for display, "
+                      "not for printing. Try a different family, or repair_model."),
+    }
 
 
 @mcp.tool
