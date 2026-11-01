@@ -42,7 +42,8 @@ Let `backend="auto"` route unless you have a reason. Reasons to override:
 - exact dimensions, hard surface, CSG → `openscad`
 - organic, bevels, materials, animation → `blender`
 - STEP file, manufacturing → `cadquery`
-- textured props fast, no scale requirement → `hosted`
+- textured props fast, no scale requirement → `hosted` (call `list_providers` first:
+  an adapter that is not `verified` should be checked before you trust its output)
 - nothing installed / offline / must be editable → `procedural`
 - a shape that has a mathematical form (knot, gear, vase, star, shell) →
   `list_shapes` then `create_shape` — do not hand-write vertex loops
