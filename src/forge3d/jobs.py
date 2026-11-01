@@ -77,12 +77,26 @@ class JobStore:
         return Job(**json.loads(p.read_text(encoding="utf-8")))
 
     def list(self, limit: int = 20) -> list[Job]:
-        files = sorted(self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        out = []
-        for f in files[:limit]:
+        """Most recent jobs first, tolerant of concurrent writers.
+
+        A record can be replaced between the glob and the stat — `os.replace`
+        removes the temp name — so both the sort key and the read have to treat a
+        vanished file as "skip", not as an error. This raced under three parallel
+        generations and took the whole call down.
+        """
+        stamped = []
+        for path in self.root.glob("*.json"):
             try:
-                out.append(Job(**json.loads(f.read_text(encoding="utf-8"))))
-            except (json.JSONDecodeError, TypeError):
+                stamped.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+        stamped.sort(key=lambda pair: pair[0], reverse=True)
+
+        out = []
+        for _mtime, path in stamped[:limit]:
+            try:
+                out.append(Job(**json.loads(path.read_text(encoding="utf-8"))))
+            except (OSError, json.JSONDecodeError, TypeError):
                 continue
         return out
 
