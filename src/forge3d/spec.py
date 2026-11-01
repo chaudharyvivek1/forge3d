@@ -87,6 +87,9 @@ class ModelSpec:
     # local   — never call a paid provider, even if it would fit better
     # cloud   — only hosted providers
     mode: str = "auto"
+    #: Supplied by the caller so a retried *request* dedupes at the provider,
+    #: not just forge3d's own retries. Optional.
+    idempotency_key: str | None = None
 
     def __post_init__(self) -> None:
         self.name = _slug(self.name or self.prompt)
