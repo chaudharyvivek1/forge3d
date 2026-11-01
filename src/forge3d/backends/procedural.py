@@ -37,6 +37,34 @@ class _Timeout(Exception):
     pass
 
 
+# Signals a child can die from when a resource limit bites. Names matter for the
+# message an agent has to act on: "exit -24" is unreadable, "SIGXCPU (CPU limit)"
+# tells you the build was too slow.
+_SIGNAL_HINTS = {
+    9: ("SIGKILL", "killed by the parent or the OS"),
+    11: ("SIGSEGV", "crashed — segmentation fault"),
+    15: ("SIGTERM", "terminated"),
+    24: ("SIGXCPU", "killed by the CPU time limit — FORGE3D_CODE_TIMEOUT"),
+    25: ("SIGXFSZ", "killed by the file-size limit"),
+}
+
+
+def _describe_exit(returncode: int) -> str:
+    """Turn a return code into something an agent can act on.
+
+    CI caught this: the CPU rlimit fires as SIGXCPU (-24) *before* the parent's
+    wall-clock timeout on a fast machine, so the generic "exit -24" path was hit
+    and the message lost the word "killed". Both paths now say what happened.
+    """
+    if returncode is None:
+        return "model code failed in the sandbox (no exit status)"
+    if returncode < 0 or returncode > 128:
+        signum = -returncode if returncode < 0 else returncode - 128
+        name, why = _SIGNAL_HINTS.get(signum, (f"signal {signum}", "terminated by a signal"))
+        return f"model code was killed ({name}: {why})"
+    return f"model code failed in the sandbox (exit {returncode})"
+
+
 def _run_guarded(code: str, namespace: dict, timeout: int):
     """Execute agent code with a wall-clock ceiling that works on every platform.
 
@@ -166,7 +194,7 @@ class ProceduralBackend(Backend):
         resource ceilings (rlimits in the child). Cost: ~1s of interpreter and
         import startup per generation.
         """
-        from ..platform_support import atomic_write, run
+        from ..platform_support import atomic_write, run, sandbox_command
 
         code_path = out_dir / f"{spec.name}_source.py"
         atomic_write(code_path, source)
@@ -178,7 +206,20 @@ class ProceduralBackend(Backend):
             str(code_path), str(glb), str(stl),
             json.dumps(spec.to_dict()), str(settings.mem_limit_mb),
         ]
-        proc = run(cmd, timeout=settings.code_timeout, cwd=str(out_dir))
+        # Wrap in the strongest isolation this machine offers, and record which
+        # one actually ran so an audit never has to trust the configuration.
+        cmd, isolation = sandbox_command(cmd, out_dir, settings.sandbox)
+
+        # The child gets a scrubbed environment: no FORGE3D_HOSTED_KEY, no cloud
+        # credentials, nothing agent code could exfiltrate. The timeout is passed
+        # explicitly because the scrub is deny-by-default.
+        proc = run(
+            cmd,
+            timeout=settings.code_timeout,
+            cwd=str(out_dir),
+            env={"FORGE3D_CODE_TIMEOUT": str(settings.code_timeout),
+                 "FORGE3D_MEM_LIMIT_MB": str(settings.mem_limit_mb)},
+        )
 
         if proc.timed_out:
             return BackendResult(
@@ -192,7 +233,7 @@ class ProceduralBackend(Backend):
         if not glb.exists():
             return BackendResult(
                 ok=False,
-                error=f"model code failed in the sandbox (exit {proc.returncode})",
+                error=_describe_exit(proc.returncode),
                 log=(proc.output or "")[-4000:],
             )
 
@@ -202,7 +243,8 @@ class ProceduralBackend(Backend):
             log=(proc.output or "")[-4000:],
             extra_outputs={"stl": str(stl), "source": str(code_path)},
             meta={"engine": "trimesh", "mode": "subprocess",
-                  "mem_limit_mb": settings.mem_limit_mb},
+                  "mem_limit_mb": settings.mem_limit_mb,
+                  "isolation": isolation},
         )
 
     @staticmethod
