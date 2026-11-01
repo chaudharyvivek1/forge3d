@@ -4,10 +4,66 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.2.1] — 2026-11-01
+
+Response to an external security and reliability review. Four of the five
+findings were fixed in code rather than merely documented.
+
+### Security
+
+- **The HTTP transport bound `0.0.0.0` with no authentication.** Anyone who could
+  reach the port could call every tool, including arbitrary model code. It now
+  binds `127.0.0.1` by default, refuses a public bind without `FORGE3D_HTTP_TOKEN`
+  (exit code 2 with an explanation), and requires
+  `Authorization: Bearer <token>` compared with `hmac.compare_digest`. `/health`
+  stays open for probes. `--allow-unauthenticated` is the explicit escape hatch.
+- **HTTP mode now forces `subprocess` exec mode**, since a network caller is not
+  assumed trustworthy.
+- `docs/security.md` states the threat model and, just as importantly, what is
+  *not* protected: no TLS, no rate limiting, no per-user identity, and subprocess
+  isolation is a reliability boundary rather than a security one.
+
+### Added
+
+- **`FORGE3D_EXEC_MODE`** — `inprocess` (fast, no isolation), `subprocess`
+  (killable child with rlimits), or `auto` (inprocess for stdio, subprocess for
+  HTTP). New `sandbox_runner` module implements the child: `RLIMIT_CPU`,
+  optional `RLIMIT_AS` via `FORGE3D_MEM_LIMIT_MB`, `RLIMIT_CORE=0`, and output
+  trusted only as files on disk.
+- **Real cancellation.** In subprocess mode a timed-out build is killed by the
+  parent, answering the review's central objection to the thread-based timeout.
+- `examples/hosted_worker.py` — a stdlib-only reference worker implementing the
+  hosted contract, so the text-to-3D path is testable end to end and one real
+  provider integration is a single function away.
+- `forge3d[http]` extra (uvicorn).
+
+### Fixed
+
+- **Concurrent generations of the same model name overwrote each other.** Output
+  now goes to `models/<name>/<job-id>/`, and the full path is returned.
+- **Job records were written non-atomically**, and a process that died
+  mid-generation left a job stuck in `running` forever. Writes are now atomic and
+  guarded by a lock; `recover_stale()` marks orphaned jobs as `interrupted` at the
+  start of each generation.
+- Starlette middleware must be passed as `(cls, args, kwargs)` triples — the first
+  implementation passed bare callables and failed at app construction. Caught by
+  the live-server test.
+
+### Tests
+
+162 passing (was 135). New `tests/test_security.py` covers the bind policy, the
+bearer middleware, a **live uvicorn server** rejecting unauthenticated requests,
+runaway code actually being killed, job isolation under concurrency, and stale-job
+recovery.
+
 ## [0.2.0] — 2026-11-01
 
 Cross-platform hardening and a bug audit of every module. Seven real defects
 fixed, each with a regression test in `tests/test_regressions.py`.
+
+### Fixed (summary)
+
+See the sections below for detail.
 
 ### Fixed
 
