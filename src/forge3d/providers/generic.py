@@ -63,10 +63,7 @@ class GenericWorkerProvider(GenerationProvider):
             "art_style": request.art_style,
             "provider": os.environ.get("FORGE3D_HOSTED_PROVIDER", "generic"),
         }
-        resp = request_with_retries(
-            "POST", f"{base.rstrip('/')}/generate",
-            json=payload, headers=self._headers(), timeout=60,
-        )
+        resp = self.submit_request(f"{base.rstrip('/')}/generate", payload)
         self._raise_for_status(resp, "submit")
         data = self._json(resp)
 
