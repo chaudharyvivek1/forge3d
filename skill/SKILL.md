@@ -44,6 +44,8 @@ Let `backend="auto"` route unless you have a reason. Reasons to override:
 - STEP file, manufacturing → `cadquery`
 - textured props fast, no scale requirement → `hosted`
 - nothing installed / offline / must be editable → `procedural`
+- a shape that has a mathematical form (knot, gear, vase, star, shell) →
+  `list_shapes` then `create_shape` — do not hand-write vertex loops
 - a planet, terrain or scene of several bodies → `create_planet` + `make_scene_viewer`
   (do not hand-roll noise in `create_model`; the crater/UV/seam work is already done)
 - the user supplies a photo or logo and wants it *made* → `image`
