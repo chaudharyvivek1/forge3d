@@ -15,6 +15,10 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_bool_log() -> bool:
+    return _env_bool("FORGE3D_LOG_JSON", False)
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
@@ -63,6 +67,24 @@ class Settings:
     # Memory ceiling for subprocess mode, in MiB. 0 disables it. Not a substitute
     # for a container: it bounds address space, not every kind of allocation.
     mem_limit_mb: int = field(default_factory=lambda: _env_int("FORGE3D_MEM_LIMIT_MB", 0))
+
+    # --- reliability -----------------------------------------------------
+    # How many generations may run at once. 3D work is CPU-bound; letting ten
+    # concurrent builds share four cores makes every one of them slow and can
+    # trip client timeouts that look like server failures.
+    max_concurrent: int = field(default_factory=lambda: _env_int("FORGE3D_MAX_CONCURRENT", 2))
+    # How long a request may wait for a free slot before being told the server is
+    # busy. A short queue absorbs bursts; an unbounded one hides overload and
+    # turns into client timeouts that look like server failures.
+    queue_wait: int = field(default_factory=lambda: _env_int("FORGE3D_QUEUE_WAIT", 30))
+    # OS-level isolation for model code: auto | bwrap | unshare | rlimit | none
+    sandbox: str = field(default_factory=lambda: os.environ.get("FORGE3D_SANDBOX", "auto").lower())
+    # HTTP requests per minute, per token/IP. 0 disables the limiter.
+    rate_limit: int = field(default_factory=lambda: _env_int("FORGE3D_RATE_LIMIT", 0))
+    # Structured JSON logs on stderr, for log aggregators.
+    log_json: bool = field(default_factory=_env_bool_log)
+    # Attempts for hosted text-to-3D calls (1 = no retry).
+    hosted_retries: int = field(default_factory=lambda: _env_int("FORGE3D_HOSTED_RETRIES", 3))
 
     def resolved_exec_mode(self) -> str:
         mode = self.exec_mode
