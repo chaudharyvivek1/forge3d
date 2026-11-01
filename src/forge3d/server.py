@@ -19,6 +19,7 @@ Run:  forge3d-mcp              (stdio, for Claude Desktop / Cursor / any client)
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -132,6 +133,18 @@ def _spec(**kwargs) -> ModelSpec:
 
 
 def _need(path: str) -> tuple[Path, dict | None]:
+    """Resolve an *input* path. Reading anywhere is allowed; writing is not.
+
+    The type check comes first on purpose: `make_viewer(None)` used to raise
+    `TypeError` from deep inside pathlib instead of returning an error the agent
+    can read and act on.
+    """
+    if not isinstance(path, (str, os.PathLike)):
+        return Path(""), {
+            "ok": False,
+            "error": f"path must be a string, got {type(path).__name__}",
+            "hint": "pass the `path` value create_model returned.",
+        }
     p = Path(path)
     if not p.exists():
         return p, {
@@ -140,6 +153,57 @@ def _need(path: str) -> tuple[Path, dict | None]:
             "hint": "use an absolute path from create_model's `path`, or list the workdir first.",
         }
     return p, None
+
+
+def _workdir_root() -> Path:
+    return get_settings().ensure_workdir().resolve()
+
+
+def _safe_out(candidate: str | os.PathLike | None,
+              default: Path) -> tuple[Path | None, dict | None]:
+    """Resolve an **output** path, refusing anything outside the work directory.
+
+    Every tool that takes an output path goes through here. Without it a caller
+    could ask forge3d to write `/etc/cron.d/x` or overwrite `~/.ssh/authorized_keys`
+    — harmless on your own laptop, a real hole in HTTP mode where the caller is
+    not trusted.
+
+    `resolve()` follows symlinks, so a symlink planted inside the workdir that
+    points outside is refused too.
+    """
+    root = _workdir_root()
+    target = Path(candidate) if candidate is not None else default
+    try:
+        dst = target.expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        return None, {"ok": False, "error": f"could not resolve the output path: {exc}"}
+
+    if not dst.is_relative_to(root):
+        # Escape hatch for local CLI work only. Never set this on a server.
+        if os.environ.get("FORGE3D_ALLOW_OUTSIDE_WORKDIR", "").lower() in ("1", "true", "yes"):
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            return dst, None
+        return None, {
+            "ok": False,
+            "error": f"refusing to write outside the work directory: {dst}",
+            "hint": (f"output paths must be inside {root}. Either pass a path under it, "
+                     f"or omit the argument to use the default. Set "
+                     f"FORGE3D_ALLOW_OUTSIDE_WORKDIR=1 for local CLI use only."),
+        }
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    return dst, None
+
+
+def _avoid_overwrite(source: Path, destination: Path, tag: str) -> Path:
+    """Never write over the file we are reading.
+
+    `convert_model(p, fmt='glb', out_path=p)` used to re-export in place: the
+    bytes changed, and a re-export can silently drop materials. Same for repair.
+    """
+    if destination == source.resolve():
+        return destination.with_name(f"{destination.stem}_{tag}{destination.suffix}")
+    return destination
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +572,11 @@ def repair_model(
         )
     except Exception as exc:
         return {"ok": False, "error": f"repair failed: {exc}", "hint": "try fill_holes=false first"}
-    dst = Path(out_path) if out_path else p.with_name(p.stem + "_repaired.glb")
+    dst, err = _safe_out(out_path,
+                         _workdir_root() / "repaired" / f"{p.stem}_repaired.glb")
+    if err:
+        return err
+    dst = _avoid_overwrite(p, dst, "repaired")
     out = meshio.export(mesh, dst)
     return {
         "ok": True,
@@ -530,7 +598,14 @@ def convert_model(path: str, fmt: str = "glb", out_path: str | None = None) -> d
         return err
     try:
         obj = meshio.load(p)
-        dst = Path(out_path) if out_path else p.with_name(p.stem).with_suffix(f".{fmt.lstrip('.')}")
+        dst, err = _safe_out(
+            out_path,
+            _workdir_root() / "converted" / f"{p.stem}.{fmt.lstrip('.')}",
+        )
+        if err:
+            return err
+        # Converting glb -> glb with out_path == the source re-exported in place.
+        dst = _avoid_overwrite(p, dst, "converted")
         out = meshio.export(obj, dst, fmt=fmt)
     except Exception as exc:
         return {"ok": False, "error": str(exc), "hint": "check the format against the supported list"}
@@ -571,7 +646,9 @@ def make_viewer(path: str, out_html: str | None = None, title: str | None = None
     p, err = _need(path)
     if err:
         return err
-    dst = Path(out_html) if out_html else get_settings().ensure_workdir() / "viewer" / f"{p.stem}.html"
+    dst, err = _safe_out(out_html, _workdir_root() / "viewer" / f"{p.stem}.html")
+    if err:
+        return err
     try:
         out = viewer.build_viewer(p, dst, title=title, spec=ModelSpec.from_dict(spec) if spec else None)
     except Exception as exc:
@@ -690,7 +767,9 @@ def make_scene_viewer(
     """
     if not items:
         return {"ok": False, "error": "no items", "hint": "pass at least one {path: ...} entry"}
-    dst = Path(out_html) if out_html else get_settings().ensure_workdir() / "viewer" / "scene.html"
+    dst, err = _safe_out(out_html, _workdir_root() / "viewer" / "scene.html")
+    if err:
+        return err
     try:
         out = viewer.build_scene_viewer(items, dst, title=title)
     except Exception as exc:  # noqa: BLE001
@@ -890,9 +969,15 @@ def create_handoff(
         owners=owners or {},
         next_agent=next_agent,
     )
-    dst = Path(out_path) if out_path else get_settings().ensure_workdir() / "handoffs" / f"{packet.id}.json"
+    dst, err = _safe_out(out_path, _workdir_root() / "handoffs" / f"{packet.id}.json")
+    if err:
+        return err
     packet.save(dst)
-    md = dst.with_suffix(".md")
+    # The sibling .md must be checked too: an out_path whose parent is outside the
+    # workdir would otherwise slip the markdown past the guard.
+    md, md_err = _safe_out(dst.with_suffix(".md"), dst.with_suffix(".md"))
+    if md_err:
+        return md_err
     md.write_text(packet.to_markdown(), encoding="utf-8")
     return {"ok": True, "id": packet.id, "json": str(dst), "markdown": str(md),
             "open_questions": packet.open_questions}
