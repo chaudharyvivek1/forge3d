@@ -100,8 +100,18 @@ Add to Claude Desktop, Cursor, or any MCP client:
 For a remote agent or your own app, run it over HTTP instead:
 
 ```bash
-forge3d-mcp --http 8000     # streamable HTTP on :8000
+pip install "forge3d[http]"
+
+forge3d-mcp --http 8000                                    # loopback only, no auth
+FORGE3D_HTTP_TOKEN=$(openssl rand -hex 32) \
+  forge3d-mcp --http 8000 --host 0.0.0.0                    # network, authenticated
 ```
+
+The HTTP transport binds `127.0.0.1` by default and **refuses a public bind
+without a token** — v0.2.0 bound `0.0.0.0` with no authentication, which meant
+anyone who could reach the port could run arbitrary model code. HTTP mode also
+forces subprocess isolation for that code. Read [docs/security.md](docs/security.md)
+before exposing it anywhere; it states plainly what is still *not* protected.
 
 Then a single call gets you from brief to shareable page:
 
@@ -242,17 +252,37 @@ src/forge3d/
   viewer.py        single-file Three.js page
   viewer_assets/   template.html + forge3d-viewer.js custom element
   platform_support.py  binary discovery, UTF-8 subprocess, thread-safe timeouts, doctor
+  http_server.py   HTTP transport: loopback default, bearer auth, bind policy
+  sandbox_runner.py  the child process for FORGE3D_EXEC_MODE=subprocess
   context.py       model cards — the only sanctioned way to describe a mesh
   handoff.py       checklists + multi-agent handoff packets
   jobs.py          durable job records for slow generations
   server.py        the MCP surface (16 tools)
   cli.py           same capabilities without an agent
 skill/             agent skill: SKILL.md + references
-docs/              architecture, platforms, backends, threejs, multi-agent, licensing
+docs/              architecture, security, platforms, backends, threejs, multi-agent, licensing
 examples/          chair (trimesh), bracket (OpenSCAD), gear (bpy), plate (CadQuery)
 tests/             pytest — unit, platform and regression suites
 Dockerfile         CPU-only image, non-root, /work volume
 ```
+
+## Security
+
+Two things worth knowing before you point this at anything other than your own
+machine:
+
+**Agent code execution.** The `procedural`, `cadquery` and `blender` backends run
+code the agent wrote. `FORGE3D_ALLOW_CODE_EXEC=false` disables that, and
+`FORGE3D_EXEC_MODE=subprocess` runs it in a killable child process with rlimits
+instead of in the server. Neither is a sandbox against a determined attacker —
+for that, use the container and keep the caller trusted.
+
+**The HTTP transport** requires a bearer token for any non-loopback bind, compares
+it in constant time, and forces subprocess isolation. It does not do TLS, rate
+limiting or per-user identity; put a reverse proxy in front for those.
+
+Full detail, including the threat model and what is deliberately *not* covered:
+[docs/security.md](docs/security.md).
 
 ## Honest limitations
 
@@ -267,6 +297,12 @@ Dockerfile         CPU-only image, non-root, /work volume
   Three.js viewer with an environment map is the better tool.
 - **Licensing.** Output rights differ sharply between hosted services. That is
   your provider's terms, not this repo's. See `docs/licensing.md`.
+- **No provider-specific integrations.** The hosted adapter speaks one documented
+  contract and ships a reference worker (`examples/hosted_worker.py`) you adapt.
+  A "universal" client for Meshy/Tripo/Rodin would be wrong in ways you would
+  only find in production, so it does not pretend to be one.
+- **Subprocess isolation is not a security boundary.** It gives real cancellation
+  and resource ceilings; it does not stop a child process reading your files.
 
 ## Licence
 
