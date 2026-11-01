@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forge3d"
-version = "0.2.0"
+version = "0.2.1"
 description = "One MCP server + agent skill that lets any AI agent design, validate and ship 3D models, then view them in Three.js."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,6 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 render = ["matplotlib>=3.7"]
+http = ["uvicorn>=0.30"]
 cad = ["cadquery>=2.4"]
 dev = ["pytest>=8.0", "ruff>=0.5"]
 
