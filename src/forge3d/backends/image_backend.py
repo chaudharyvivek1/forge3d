@@ -28,6 +28,11 @@ import trimesh
 from ..spec import ModelSpec
 from .base import Backend, BackendResult
 
+
+class ImageFetchRefused(RuntimeError):
+    """A remote image was refused by the URL guard, with a reason."""
+
+
 MODES = ("auto", "relief", "silhouette")
 DEFAULT_GRID = 192
 MIN_GRID = 32
@@ -80,7 +85,16 @@ class ImageBackend(Backend):
                 log="pip install pillow",
             )
 
-        image_path = self._resolve_image(spec, source)
+        try:
+            image_path = self._resolve_image(spec, source)
+        except ImageFetchRefused as exc:
+            return BackendResult(
+                ok=False,
+                error=f"refused to fetch that image: {exc}",
+                log="Remote images are restricted to public http(s) hosts with a size "
+                    "and pixel budget. Download it yourself and pass a local path if it "
+                    "is on a private network.",
+            )
         if image_path is None:
             return BackendResult(
                 ok=False,
@@ -153,19 +167,20 @@ class ImageBackend(Backend):
         if not candidate:
             return None
         if str(candidate).startswith(("http://", "https://")):
+            # Guarded fetch: SSRF checks, redirect revalidation, byte ceiling and
+            # a real image decode. `requests.get(url)` + `.content` — the obvious
+            # implementation — will happily read cloud metadata or a 4 GB file.
             import tempfile
 
-            import requests
+            from ..netguard import UnsafeURLError, fetch_image
 
             try:
-                resp = requests.get(candidate, timeout=60)
-                resp.raise_for_status()
-            except Exception:
-                return None
-            suffix = Path(candidate.split("?")[0]).suffix or ".png"
-            tmp = Path(tempfile.mkdtemp(prefix="forge3d-image-")) / f"input{suffix}"
-            tmp.write_bytes(resp.content)
-            return tmp
+                tmp_dir = Path(tempfile.mkdtemp(prefix="forge3d-image-"))
+                return fetch_image(str(candidate), tmp_dir / "input.png")
+            except UnsafeURLError as exc:
+                raise ImageFetchRefused(str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise ImageFetchRefused(f"could not fetch {candidate}: {exc}") from exc
         p = Path(candidate).expanduser()
         return p if p.is_file() else None
 
