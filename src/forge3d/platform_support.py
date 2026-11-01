@@ -24,6 +24,7 @@ real bugs before it existed:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import platform
 import re
@@ -36,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 IS_WINDOWS = sys.platform.startswith("win")
+IS_LINUX_OR_MACOS = not IS_WINDOWS
 IS_MACOS = sys.platform == "darwin"
 IS_LINUX = sys.platform.startswith("linux")
 
@@ -51,12 +53,37 @@ class ToolNotFound(RuntimeError):
     """A required external binary could not be located."""
 
 
+def _limit_preexec() -> None:  # pragma: no cover - runs in the child
+    """Apply rlimits in the forked child, before exec.
+
+    POSIX only. `preexec_fn` is documented as unsafe in a threaded program, and
+    the alternative (a wrapper process) does not help because the limits have to
+    be set before exec anyway. Kept as narrow as possible for that reason.
+    """
+    import resource
+
+    def _set(which, value):
+        with contextlib.suppress(ValueError, OSError):
+            resource.setrlimit(which, (value, value))
+
+    cpu = int(os.environ.get("FORGE3D_CODE_TIMEOUT", "120") or 120)
+    _set(resource.RLIMIT_CPU, max(1, cpu) + 1)
+    _set(resource.RLIMIT_CORE, 0)
+    _set(resource.RLIMIT_FSIZE, 512 * 1024 * 1024)
+    with contextlib.suppress(Exception):
+        _set(resource.RLIMIT_NOFILE, 256)
+    mem_mb = int(os.environ.get("FORGE3D_MEM_LIMIT_MB", "0") or 0)
+    if mem_mb > 0:
+        _set(resource.RLIMIT_AS, mem_mb * 1024 * 1024)
+
+
 @dataclass
 class RunResult:
     ok: bool
     returncode: int
     output: str
     timed_out: bool = False
+    limits_applied: bool = False
     command: list[str] | None = None
 
     def to_dict(self) -> dict:
@@ -220,7 +247,8 @@ def child_env(extra: dict | None = None) -> dict[str, str]:
 
 
 def run(cmd: list[str], timeout: int = 300, cwd: str | Path | None = None,
-        stdin_text: str | None = None, env: dict | None = None) -> RunResult:
+        stdin_text: str | None = None, env: dict | None = None,
+        limits: bool = False) -> RunResult:
     """Run a command with UTF-8 I/O, a scrubbed environment and a hard timeout.
 
     `encoding="utf-8"` with `errors="replace"` is deliberate: without it, a
@@ -239,6 +267,8 @@ def run(cmd: list[str], timeout: int = 300, cwd: str | Path | None = None,
             input=stdin_text,
             env=child_env(env),
             creationflags=_CREATE_NO_WINDOW,
+            # rlimits can only be set before exec, so they go in the forked child.
+            preexec_fn=(_limit_preexec if (limits and IS_LINUX_OR_MACOS) else None),
         )
     except subprocess.TimeoutExpired as exc:
         partial = ""
@@ -246,7 +276,8 @@ def run(cmd: list[str], timeout: int = 300, cwd: str | Path | None = None,
             if stream:
                 partial += stream if isinstance(stream, str) else stream.decode("utf-8", "replace")
         return RunResult(ok=False, returncode=-1, output=partial,
-                         timed_out=True, command=[str(c) for c in cmd])
+                         timed_out=True, command=[str(c) for c in cmd],
+                         limits_applied=bool(limits and IS_LINUX_OR_MACOS))
     except FileNotFoundError:
         return RunResult(ok=False, returncode=127,
                          output=f"executable not found: {cmd[0]}", command=[str(c) for c in cmd])
@@ -256,7 +287,8 @@ def run(cmd: list[str], timeout: int = 300, cwd: str | Path | None = None,
 
     output = (proc.stdout or "") + (proc.stderr or "")
     return RunResult(ok=proc.returncode == 0, returncode=proc.returncode,
-                     output=output, command=[str(c) for c in cmd])
+                     output=output, command=[str(c) for c in cmd],
+                     limits_applied=bool(limits and IS_LINUX_OR_MACOS))
 
 
 # ---------------------------------------------------------------------------
