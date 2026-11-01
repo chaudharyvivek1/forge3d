@@ -413,9 +413,11 @@ def render_model(path: str, views: list[str] | None = None, size: int = 720) -> 
 def make_viewer(path: str, out_html: str | None = None, title: str | None = None, spec: dict | None = None) -> dict:
     """Build a single self-contained Three.js HTML page with the model embedded.
 
-    The page works offline and needs no server — send the file to anyone. For
-    embedding inside an existing web app, use the `forge3d-viewer` custom
-    element instead (viewer_assets/forge3d-viewer.js).
+    The mesh is embedded as a data URI, so the page needs no server, no CORS and
+    no hosting — send the file to anyone. Note that three.js itself loads from a
+    CDN by default: for an air-gapped machine, set FORGE3D_THREE_URL to a local
+    mirror before building the page. For embedding inside an existing web app,
+    use the `forge3d-viewer` custom element instead (viewer_assets/forge3d-viewer.js).
     """
     p, err = _need(path)
     if err:

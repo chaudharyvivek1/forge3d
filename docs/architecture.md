@@ -18,7 +18,7 @@ Everything else is plumbing around those four.
 
 ```
                     ┌──────────────┐
-   agent / user ───►│  server.py   │  MCP: 13 tools, JSON in, JSON out
+   agent / user ───►│  server.py   │  MCP: 16 tools, JSON in, JSON out
                     │  cli.py      │  same capabilities, no agent
                     └──────┬───────┘
                            │

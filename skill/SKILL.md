@@ -79,8 +79,9 @@ re-check and hope.**
 - print → `.stl` (or `.3mf`), 1:1 scale, mm
 - web / game → `.glb`, textures embedded
 - manufacturing → `.step` (only from the `cadquery` backend)
-- `make_viewer` gives a single HTML file that works offline — the fastest way to
-  let a non-technical user see the result
+- `make_viewer` gives a single HTML file with the mesh embedded — no server, no
+  hosting, the fastest way to let a non-technical user see the result. (three.js
+  loads from a CDN by default; set `FORGE3D_THREE_URL` for air-gapped use.)
 
 ### 7. Hand off — `create_handoff`
 When another agent, or a human, picks this up next, write the packet. Include
