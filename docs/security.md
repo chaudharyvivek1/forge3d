@@ -143,9 +143,65 @@ The token is a shared secret, not a user system. There are no per-user
 identities, no scopes, no audit log of who called what. If you need those, put an
 OAuth proxy in front and keep this server on loopback behind it.
 
-**Not implemented, and you should know it:** TLS termination, rate limiting, CORS
-policy beyond fastmcp's defaults, and request-size limits. Use a reverse proxy
+**Implemented in-process:** a token-bucket rate limiter
+(`FORGE3D_RATE_LIMIT`, requests per minute per token/IP, `429` + `Retry-After`),
+bearer authentication, and a bounded concurrency queue.
+
+**Still not implemented:** TLS termination, per-user identity, CORS policy beyond
+fastmcp's defaults, and request-size limits. The rate limiter is per-process and
+in-memory, so it does not coordinate across instances — use a reverse proxy
 (nginx, Caddy, Traefik) for all four.
+
+## One policy for every code-running backend
+
+Three backends run caller-supplied code: `procedural`, `cadquery` and `blender`.
+Each declares `executes_user_code = True`, and the registry refuses any of them
+when `FORGE3D_ALLOW_CODE_EXEC=false` — the check is in the single dispatch point,
+not duplicated per backend.
+
+That matters because it was previously duplicated: only `procedural` checked, so
+disabling code execution still left CadQuery executing in-process with no timeout
+and Blender running unsandboxed. Both now honour `FORGE3D_EXEC_MODE` and
+`FORGE3D_SANDBOX` like the procedural backend does.
+
+`openscad` is marked `executes_user_code = False` because its source is a
+declarative DSL rather than Python. That is not a claim of safety: OpenSCAD's
+`import()` can read files the service user can read.
+
+## Remote images are fetched through a guard
+
+The image backend accepts URLs. `requests.get(url)` + `.content` — the obvious
+implementation, and the one this repo shipped — is a server-side request forgery
+primitive and a memory-exhaustion bug. `netguard.py` now enforces:
+
+- **scheme**: http/https only;
+- **address**: every resolved IP is checked against loopback, private, link-local,
+  reserved and multicast ranges, **after every redirect hop** (a public host that
+  302s to `127.0.0.1` is refused);
+- **size**: streamed with a hard byte ceiling (`FORGE3D_MAX_DOWNLOAD_MB` applies to
+  provider downloads; the image path caps at 25 MiB);
+- **content**: the declared type must be an image, the bytes must decode, and the
+  pixel count must stay inside a budget so a decompression bomb is refused.
+
+A refusal names the reason and suggests passing a local path instead.
+
+## Paid submissions are not retried blindly
+
+A job-creation POST that times out may already have created a job. Retrying it can
+buy a second generation. Submission therefore:
+
+- sends an `Idempotency-Key` header (providers that support it will dedupe);
+- is **never** retried after an ambiguous timeout or a 5xx;
+- raises `AmbiguousSubmission` carrying that key, which the backend reports as
+  `status: uncertain` with "do not retry, reconcile first".
+
+Ordinary GETs are still retried with jittered backoff.
+
+## Bubblewrap is not a confidentiality boundary
+
+The sandbox binds the host root read-only. That stops writes; it does **not** make
+host files unreadable. Anything the service user can read, the sandboxed child can
+read. Treat it as an integrity and blast-radius control, not a secrecy one.
 
 ## Filesystem
 
