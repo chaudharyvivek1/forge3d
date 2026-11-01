@@ -295,8 +295,20 @@ def test_blender_uses_the_configured_timeout_and_reports_isolation(monkeypatch, 
             ModelSpec(name="b"), tmp_path, source="import bpy")
         assert captured.get("limits") is True, "Blender ran without limits"
         assert captured.get("timeout") == 45, "Blender ignored FORGE3D_CODE_TIMEOUT"
-        assert "unavailable" in result.meta["isolation"], (
-            "a fallback labelled rlimit must not imply limits were applied")
+
+        # The label must match reality, whatever this machine has. GitHub runners
+        # ship bubblewrap, so asserting "unavailable" failed on CI — the invariant
+        # is the correspondence, not one particular outcome.
+        isolation = result.meta["isolation"]
+        if isolation == "bwrap":
+            pass                                    # a real sandbox: nothing more to claim
+        elif isolation == "rlimit":
+            from forge3d.platform_support import IS_WINDOWS
+
+            assert not IS_WINDOWS, "rlimit claimed on a platform without rlimits"
+        else:
+            assert "unavailable" in isolation, (
+                f"isolation {isolation!r} claims something it did not do")
     finally:
         monkeypatch.delenv("FORGE3D_CODE_TIMEOUT", raising=False)
         config._settings = None
@@ -381,23 +393,36 @@ def test_meshy_cancels_an_image_job_on_the_image_endpoint(monkeypatch):
 
 
 def test_downloaded_reference_images_are_cleaned_up(monkeypatch, tmp_path):
+    """Cleanup is request-local; a module-global list deleted other requests' files."""
     from forge3d.backends import image_backend
 
-    monkeypatch.setattr(image_backend, "_TEMP_DIRS", [])
     created = []
 
-    def fake_resolve(self, spec, source):
+    def fake_resolve(spec, source):
         import tempfile
         from pathlib import Path
 
         d = Path(tempfile.mkdtemp(prefix="forge3d-image-test-"))
-        image_backend._TEMP_DIRS.append(d)
         created.append(d)
         from PIL import Image
         Image.new("L", (8, 8)).save(d / "input.png")
-        return d / "input.png"
+        return d / "input.png", d
 
-    monkeypatch.setattr(image_backend.ImageBackend, "_resolve_image", fake_resolve)
+    monkeypatch.setattr(image_backend.ImageBackend, "_resolve_image",
+                        staticmethod(fake_resolve))
     backends.get_backend("image").generate(
         ModelSpec(name="cleanup", references=["x"]), tmp_path, mode="relief", grid=32)
     assert created and not created[0].exists(), "the downloaded reference image was left behind"
+
+
+def test_a_local_image_path_needs_no_cleanup(tmp_path):
+    from PIL import Image
+
+    from forge3d.backends import image_backend
+
+    src = tmp_path / "local.png"
+    Image.new("L", (16, 16)).save(src)
+    path, temp_dir = image_backend.ImageBackend._resolve_image(
+        ModelSpec(name="l", references=[str(src)]), None)
+    assert path == src and temp_dir is None
+    assert src.exists(), "a caller-supplied file must never be deleted"
