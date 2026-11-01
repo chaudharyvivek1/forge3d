@@ -41,6 +41,11 @@ class Backend:
     kind: str = "local"          # local | external
     requires: tuple[str, ...] = ()
     capabilities: dict = {}
+    #: True when this backend runs code supplied by the caller. The registry
+    #: refuses such a backend outright when FORGE3D_ALLOW_CODE_EXEC is false —
+    #: previously only the procedural backend checked, so CadQuery and Blender
+    #: bypassed the setting entirely.
+    executes_user_code: bool = False
 
     def available(self) -> bool:
         raise NotImplementedError
@@ -51,6 +56,7 @@ class Backend:
             "kind": self.kind,
             "available": self.available(),
             "requires": list(self.requires),
+            "executes_user_code": self.executes_user_code,
             "capabilities": self.capabilities,
         }
 
