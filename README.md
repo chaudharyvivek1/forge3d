@@ -70,9 +70,12 @@ cd forge3d
 pip install -e ".[render,dev]"
 ```
 
-> **PyPI:** the package is built and metadata-checked (`forge3d-0.6.5-py3-none-any.whl`)
-> but not yet published, so `pip install forge3d` does not resolve. See
-> [Releasing](#releasing) for the two commands that publish it.
+> **PyPI:** publishing is automated — `.github/workflows/release.yml` builds the
+> sdist and wheel, runs `twine check`, installs the wheel in a clean venv and smoke
+> tests it, then publishes via PyPI **trusted publishing** on a `v*` tag. It is
+> waiting on a one-time setup step (below); until that is done,
+> `pip install forge3d` does not resolve and the `git+https://` line above is the
+> install path.
 
 Optional engines — install only what you need:
 
@@ -354,14 +357,23 @@ create_handoff(
 
 ## Releasing
 
+Tagging is the release:
+
 ```bash
-python -m build --wheel
-python -m twine check dist/*
-python -m twine upload dist/*        # needs PYPI_API_TOKEN
+git tag v0.6.7 && git push origin v0.6.7
 ```
 
-Everything up to the upload is verified in CI; the upload itself needs the
-maintainer's token and is not automated.
+The workflow verifies the build before it uploads anything, so a broken README or
+bad metadata fails in CI rather than on PyPI.
+
+**One-time setup, on PyPI** (not in this repo): add a trusted publisher at
+<https://pypi.org/manage/account/publishing/> with owner `chaudharyvivek1`,
+repository `forge3d`, workflow `release.yml`, environment `pypi`. No API token is
+stored anywhere. If you would rather use a token, add the secret `PYPI_API_TOKEN`
+and swap the `with:` block in the workflow.
+
+To check the pipeline without publishing, run the workflow manually — the publish
+job only runs on a `v*` tag.
 
 ## Repository layout
 
