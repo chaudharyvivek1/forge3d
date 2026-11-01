@@ -63,7 +63,8 @@ class GenericWorkerProvider(GenerationProvider):
             "art_style": request.art_style,
             "provider": os.environ.get("FORGE3D_HOSTED_PROVIDER", "generic"),
         }
-        resp = self.submit_request(f"{base.rstrip('/')}/generate", payload)
+        resp = self.submit_request(f"{base.rstrip('/')}/generate", payload,
+                                   idempotency_key=request.extra.get("idempotency_key"))
         self._raise_for_status(resp, "submit")
         data = self._json(resp)
 
