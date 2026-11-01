@@ -105,6 +105,26 @@ def resolve_auto(spec: ModelSpec, source: str | None = None, purpose_hint: str |
     return "procedural"
 
 
+def mode_violation(mode: str, backend_name: str) -> str | None:
+    """Is this backend allowed under this mode? Returns a reason, or None.
+
+    `resolve_auto` honours `spec.mode`, but a caller can name a backend
+    explicitly and walk straight past it. That made the local/cloud guarantee a
+    promise the code did not keep: `backend="hosted", mode="local"` would still
+    make a billable call. The constraint is checked here, at the single point
+    every generation goes through.
+    """
+    mode = (mode or "auto").lower()
+    name = (backend_name or "").lower()
+    if mode == "local" and name == "hosted":
+        return ("mode='local' forbids the hosted backend, which bills a provider. "
+                "Use a local engine, or pass mode='auto'/'cloud' if spending is intended.")
+    if mode == "cloud" and name and name != "hosted":
+        return ("mode='cloud' means hosted providers only; "
+                f"{name!r} runs locally. Pass mode='auto'/'local', or backend='hosted'.")
+    return None
+
+
 def run(
     backend_name: str,
     spec: ModelSpec,
@@ -112,6 +132,17 @@ def run(
     source: str | None = None,
     **kwargs,
 ) -> tuple[str, BackendResult]:
-    name = resolve_auto(spec, source) if (backend_name or "auto").lower() == "auto" else backend_name.lower()
+    requested = (backend_name or "auto").lower()
+    mode = (getattr(spec, "mode", "auto") or "auto").lower()
+
+    if requested == "auto":
+        name = resolve_auto(spec, source)
+    else:
+        name = requested
+        violation = mode_violation(mode, name)
+        if violation:
+            return name, BackendResult(ok=False, error=violation,
+                                       log=f"spec.mode={mode!r}, backend={name!r}")
+
     backend = get_backend(name)
     return name, backend.generate(spec, out_dir, source=source, **kwargs)
