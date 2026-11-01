@@ -105,7 +105,9 @@ class HostedBackend(Backend):
             art_style=kwargs.get("art_style"),
             seed=spec.seed,
             output_format=kwargs.get("output_format", "glb"),
-            extra=dict(kwargs.get("provider_extra") or {}),
+            extra={**(kwargs.get("provider_extra") or {}),
+                   **({"idempotency_key": spec.idempotency_key}
+                      if getattr(spec, "idempotency_key", None) else {})},
         )
 
     def generate(self, spec: ModelSpec, out_dir: Path, source: str | None = None,
@@ -168,7 +170,21 @@ class HostedBackend(Backend):
             try:
                 job = provider.get_status(job.job_id)
             except (ProviderError, requests.RequestException) as exc:
-                return BackendResult(ok=False, error=f"polling failed: {exc}")
+                # We lost sight of it; the remote job may still be running and
+                # billing. Try to stop it before reporting failure.
+                cancelled = False
+                try:
+                    cancelled = provider.cancel(job.job_id)
+                except Exception:  # noqa: BLE001
+                    cancelled = False
+                return BackendResult(
+                    ok=False,
+                    error=(f"polling failed: {exc}"
+                           + (" (remote job cancelled)" if cancelled
+                              else " (remote job may still be running)")),
+                    meta={"provider": provider.name, "job_id": job.job_id,
+                          "cancelled": cancelled},
+                )
 
         if job.status != SUCCEEDED:
             return BackendResult(
