@@ -48,6 +48,11 @@ class MeshyProvider(GenerationProvider):
         return {"credits": 5 if request.art_style else 20, "eta_seconds": 120,
                 "currency_cost": None, "note": "credit cost depends on your plan"}
 
+    def __init__(self) -> None:
+        # Remember which endpoint created each job: cancelling an image task on
+        # the text endpoint is a silent no-op.
+        self._kinds: dict[str, str] = {}
+
     def _headers(self) -> dict:
         key = self.api_key()
         if not key:
@@ -70,7 +75,8 @@ class MeshyProvider(GenerationProvider):
                 "art_style": request.art_style or "realistic",
                 "should_remesh": True,
             }
-        resp = self.submit_request(self.base_url() + path, payload)
+        resp = self.submit_request(self.base_url() + path, payload,
+                                   idempotency_key=request.extra.get("idempotency_key"))
         self._raise_for_status(resp, "submit")
         data = self._json(resp)
 
@@ -79,6 +85,9 @@ class MeshyProvider(GenerationProvider):
             raise ProviderError(f"meshy: no job id in response: {str(data)[:200]}")
         job = ProviderJob(provider=self.name, job_id=str(job_id), raw=data)
         job.raw["_kind"] = kind
+        if len(self._kinds) > 500:          # bounded; this is a long-lived singleton
+            self._kinds.clear()
+        self._kinds[str(job_id)] = kind
         return job
 
     def get_status(self, job_id: str) -> ProviderJob:
@@ -105,13 +114,18 @@ class MeshyProvider(GenerationProvider):
         )
 
     def cancel(self, job_id: str) -> bool:
-        try:
-            resp = request_with_retries("DELETE",
-                                        f"{self.base_url()}/openapi/v2/text-to-3d/{job_id}",
-                                        attempts=1, headers=self._headers(), timeout=30)
-            return resp.status_code < 400
-        except Exception:  # noqa: BLE001 - cancellation is best effort
-            return False
+        paths = ["/openapi/v2/text-to-3d", "/openapi/v1/image-to-3d"]
+        if self._kinds.get(str(job_id)) == "image":
+            paths.reverse()
+        for path in paths:
+            try:
+                resp = request_with_retries("DELETE", f"{self.base_url()}{path}/{job_id}",
+                                            attempts=1, headers=self._headers(), timeout=30)
+                if resp.status_code < 400:
+                    return True
+            except Exception:  # noqa: BLE001 - cancellation is best effort
+                continue
+        return False
 
     def check(self) -> dict:
         if not self.api_key():
