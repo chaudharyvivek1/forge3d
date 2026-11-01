@@ -103,20 +103,42 @@ designed for:
 - Blender will almost never be present, and `doctor` says so plainly rather
   than letting the agent guess.
 
-## Timeouts
+## Timeouts and isolation
 
-`FORGE3D_CODE_TIMEOUT` (default 120 s) bounds agent-written model code.
+`FORGE3D_CODE_TIMEOUT` (default 120 s) bounds agent-written model code, and
+`FORGE3D_EXEC_MODE` decides where that code runs.
 
-The implementation is thread-based, not `signal`-based, because `signal.alarm`
+| Mode | Cancellation | rlimits | Startup | Use when |
+|---|---|---|---|---|
+| `inprocess` | none — the work is abandoned and keeps running | no | instant | local stdio server, trusted agent |
+| `subprocess` | **real** — the parent kills the child | `RLIMIT_CPU`, optional `RLIMIT_AS`, `RLIMIT_CORE=0` | ~1 s | anything reachable by someone else |
+| `auto` (default) | per mode above | | | inprocess for stdio, subprocess for HTTP |
+
+The in-process timeout is thread-based, not `signal`-based, because `signal.alarm`
 does not exist on Windows and raises `ValueError: signal only works in main
 thread` everywhere else — and MCP servers run synchronous tools in a threadpool.
+Python cannot kill a thread, so `inprocess` can only abandon the work; that is
+the honest limitation the `subprocess` mode exists to remove.
 
-**Honest limitation:** Python cannot kill a thread. On timeout the work is
-*abandoned*, not stopped; it keeps consuming CPU until it finishes on its own.
-Real containment needs a process boundary (a container, a subprocess with
-`kill`, or a sandboxed runtime). That is why code execution is gated behind
-`FORGE3D_ALLOW_CODE_EXEC`, and why the default is to run forge3d locally as a
-stdio server under an agent you already trust.
+On Windows, `subprocess` mode still gives real cancellation (the parent kills the
+child) but not rlimits, because the `resource` module is POSIX-only. Run the
+container if you need memory ceilings there.
+
+See [security.md](security.md) for what isolation does and does not buy you.
+
+## Startup time
+
+First import is the slowest part of any run: `trimesh` pulls in `scipy.spatial`,
+which dominates a cold start (measured at ~13 s on a slow container disk with no
+bytecode cache; roughly 1.5–3 s on a normal laptop with a warm cache).
+
+That matters for MCP clients, which spawn the server and wait for the
+`initialize` handshake before they will talk to it. Give a new server ~30 s on
+first launch. Subsequent launches are faster once `__pycache__` exists.
+
+If your client times out at startup, the fix is on the client side (raise its
+spawn timeout) — nothing in forge3d is hanging; it is importing a geometry
+library.
 
 ## Verifying your machine
 
