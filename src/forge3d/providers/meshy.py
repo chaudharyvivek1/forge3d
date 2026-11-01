@@ -70,7 +70,7 @@ class MeshyProvider(GenerationProvider):
                 "art_style": request.art_style or "realistic",
                 "should_remesh": True,
             }
-        resp = request_with_retries("POST", self.base_url() + path, attempts=3,
+        resp = request_with_retries("POST", self.base_url() + path,
                                     json=payload, headers=self._headers(), timeout=60)
         self._raise_for_status(resp, "submit")
         data = self._json(resp)
@@ -84,11 +84,11 @@ class MeshyProvider(GenerationProvider):
 
     def get_status(self, job_id: str) -> ProviderJob:
         path = f"/openapi/v2/text-to-3d/{job_id}"
-        resp = request_with_retries("GET", self.base_url() + path, attempts=3,
+        resp = request_with_retries("GET", self.base_url() + path,
                                     headers=self._headers(), timeout=60)
         if resp.status_code == 404:
             path = f"/openapi/v1/image-to-3d/{job_id}"
-            resp = request_with_retries("GET", self.base_url() + path, attempts=3,
+            resp = request_with_retries("GET", self.base_url() + path,
                                         headers=self._headers(), timeout=60)
         self._raise_for_status(resp, "status")
         data = self._json(resp)
