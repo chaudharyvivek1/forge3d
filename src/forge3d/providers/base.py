@@ -144,10 +144,10 @@ def request_with_retries(method: str, url: str, attempts: int | None = None,
             resp = requests.request(method, url, **kwargs)
             if resp.status_code >= 500:
                 if not idempotent:
-                    raise ProviderError(
-                        f"{method} {url} returned {resp.status_code}; the request may "
-                        f"already have been accepted — not retrying"
-                    )
+                    # 500/502/503 on a create request is ambiguous: the provider may
+                    # have made the job and then failed to answer. Classifying it as
+                    # a plain failure invited a retry that costs money.
+                    raise AmbiguousHTTPError(resp.status_code, url)
                 raise requests.RequestException(f"server error {resp.status_code}")
             return resp
         except requests.RequestException as exc:
@@ -167,6 +167,16 @@ def request_with_retries(method: str, url: str, attempts: int | None = None,
 
 class ProviderError(RuntimeError):
     """A provider call failed in a way the caller should see verbatim."""
+
+
+class AmbiguousHTTPError(ProviderError):
+    """A non-idempotent POST got a 5xx: it may or may not have been accepted."""
+
+    def __init__(self, status: int, url: str) -> None:
+        self.status = status
+        self.url = url
+        super().__init__(f"POST {url} returned {status}; the request may already "
+                         f"have been accepted")
 
 
 class AmbiguousSubmission(ProviderError):
@@ -254,22 +264,45 @@ class GenerationProvider(ABC):
         out_dir.mkdir(parents=True, exist_ok=True)
         suffix = Path(job.asset_url.split("?")[0]).suffix or ".glb"
         target = out_dir / f"{name}{suffix}"
+        # Size and destination are different problems. The cap stops a giant
+        # file; the guard stops `http://127.0.0.1:9200/` — a compromised worker or
+        # a hostile provider can return any URL it likes, and this used to fetch
+        # it unexamined.
+        from .. import netguard
+
         limit = int(os.environ.get("FORGE3D_MAX_DOWNLOAD_MB", "512")) * 1024 * 1024
-        written = 0
-        with request_with_retries("GET", job.asset_url, stream=True, timeout=300) as resp:
-            resp.raise_for_status()
-            with open(target, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=1 << 16):
-                    written += len(chunk)
-                    if written > limit:
-                        fh.close()
-                        target.unlink(missing_ok=True)
-                        raise ProviderError(
-                            f"{self.name}: download exceeded "
-                            f"{limit // (1024 * 1024)} MB (FORGE3D_MAX_DOWNLOAD_MB)"
-                        )
-                    fh.write(chunk)
-        return target
+        self._check_download_host(job.asset_url)
+
+        try:
+            return netguard.fetch_to_file(
+                job.asset_url, target, max_bytes=limit, timeout=300,
+                allow_private=bool(int(os.environ.get("FORGE3D_ALLOW_PRIVATE_DOWNLOAD", "0"))),
+            )
+        except netguard.UnsafeURLError as exc:
+            target.unlink(missing_ok=True)
+            raise ProviderError(
+                f"{self.name}: refused to download {job.asset_url!r}: {exc}"
+            ) from exc
+
+    def _check_download_host(self, url: str) -> None:
+        """Optional allowlist of trusted asset hosts.
+
+        `FORGE3D_TRUSTED_DOWNLOAD_HOSTS=cdn.meshy.ai,assets.tripo3d.ai` restricts
+        downloads to the domains you actually expect. Empty means "any public
+        host", which is still SSRF-checked by netguard.
+        """
+        allowed = os.environ.get("FORGE3D_TRUSTED_DOWNLOAD_HOSTS", "").strip()
+        if not allowed:
+            return
+        from urllib.parse import urlparse
+
+        host = (urlparse(url).hostname or "").lower()
+        domains = [d.strip().lower() for d in allowed.split(",") if d.strip()]
+        if not any(host == d or host.endswith("." + d) for d in domains):
+            raise ProviderError(
+                f"{self.name}: download host {host!r} is not in "
+                f"FORGE3D_TRUSTED_DOWNLOAD_HOSTS ({', '.join(domains)})"
+            )
 
     def check(self) -> dict:
         """Live connectivity/auth check. Override where the provider offers one."""
@@ -281,7 +314,8 @@ class GenerationProvider(ABC):
 
     # -- helpers ---------------------------------------------------------
     def submit_request(self, url: str, payload: dict, timeout: int = 60,
-                       attempts: int | None = None) -> requests.Response:
+                       attempts: int | None = None,
+                       idempotency_key: str | None = None) -> requests.Response:
         """POST a job-creation request safely.
 
         Adds an `Idempotency-Key` header (providers that support it will dedupe),
@@ -290,7 +324,9 @@ class GenerationProvider(ABC):
         """
         import uuid
 
-        key = uuid.uuid4().hex
+        # A caller-supplied key lets a retried *user request* dedupe at the
+        # provider. A fresh random key per call only helps against our own retries.
+        key = idempotency_key or uuid.uuid4().hex
         headers = dict(self._headers())
         headers["Idempotency-Key"] = key
         try:
@@ -299,6 +335,8 @@ class GenerationProvider(ABC):
                 json=payload, headers=headers, timeout=timeout,
             )
         except requests.Timeout as exc:
+            raise AmbiguousSubmission(self.name, key, str(exc)) from exc
+        except AmbiguousHTTPError as exc:
             raise AmbiguousSubmission(self.name, key, str(exc)) from exc
         except ProviderError:
             raise
