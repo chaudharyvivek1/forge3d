@@ -178,6 +178,32 @@ is shrunk automatically to fit `poly_budget` *before* generating. Holes in a mas
 survive as real holes. Full detail, including what it will not do:
 [docs/image-to-3d.md](docs/image-to-3d.md).
 
+## Procedural planets and scenes
+
+A website hero scene needs four rocky planets, not four bracket models. The
+`planets` generator is that shape family, done once and tested:
+
+```python
+create_planet(radius=55, seed=11, canyon=True, subdivisions=5, texture_resolution=512)
+# -> GLB with baked albedo + normal + metallic-roughness, spherical UVs, watertight
+
+make_scene_viewer(items=[
+    {"path": "mars-prime.glb",  "position": [0, 0, 0]},
+    {"path": "mars-canyon.glb", "position": [105, -60, -80]},
+], title="Four-Planet Mars Scene")
+# -> one self-contained Three.js page: shared sun, 9k-point starfield, orbit controls
+```
+
+Noise is sampled in 3D on the sphere (no UV seam), craters are analytic bowls
+*with* rims, and textures are baked from the same fields as the geometry so the
+colour and the silhouette always agree. Everything is seeded, so the hero image
+is reproducible. Reference scene: 51k triangles, ~17 s, 3.5 MB page — see
+[docs/geometry.md](docs/geometry.md) for the size budget and what it will not do.
+
+**`ModelSpec.mode`** — `local` never routes to a paid provider, `cloud` never
+routes to a local engine, `auto` decides on fit. A tool that quietly upgrades you
+into a billable API call is not being helpful.
+
 ## Production behaviour
 
 - **`GET /health`** — no token needed, reports version, uptime, exec mode,
@@ -284,6 +310,7 @@ blocked CDN instead of showing a blank canvas.
 src/forge3d/
   spec.py          the brief as data — purpose, units, dimensions, budget
   backends/        procedural · image · openscad · blender · cadquery · hosted
+  geometry/        reusable generators: planets (terrain, craters, canyons, PBR bake)
   validate.py      profile-based checks, every failure carries a fix hint
   repair.py        merge, drop, fill, re-orient, decimate
   render.py        CPU previews (matplotlib) — works headless, no GPU
@@ -295,10 +322,10 @@ src/forge3d/
   context.py       model cards — the only sanctioned way to describe a mesh
   handoff.py       checklists + multi-agent handoff packets
   jobs.py          durable job records for slow generations
-  server.py        the MCP surface (16 tools)
+  server.py        the MCP surface (18 tools)
   cli.py           same capabilities without an agent
 skill/             agent skill: SKILL.md + references
-docs/              architecture, security, reliability, image-to-3d, platforms,
+docs/              architecture, security, reliability, image-to-3d, geometry, platforms,
                    backends, threejs, multi-agent, licensing
 examples/          chair (trimesh), bracket (OpenSCAD), gear (bpy), plate (CadQuery)
 tests/             pytest — unit, platform and regression suites
