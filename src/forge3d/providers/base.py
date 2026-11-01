@@ -45,6 +45,9 @@ RUNNING = "running"
 SUCCEEDED = "succeeded"
 FAILED = "failed"
 CANCELLED = "cancelled"
+#: The request may or may not have created a job. Never treat this as failure
+#: without checking the provider: retrying could buy a second generation.
+UNCERTAIN = "uncertain"
 TERMINAL = (SUCCEEDED, FAILED, CANCELLED)
 
 _STATUS_ALIASES = {
@@ -114,7 +117,7 @@ class ProviderJob:
 
 
 def request_with_retries(method: str, url: str, attempts: int | None = None,
-                         **kwargs) -> requests.Response:
+                         idempotent: bool = True, **kwargs) -> requests.Response:
     """HTTP with bounded exponential backoff and jitter.
 
     Retries 5xx and connection errors; never 4xx — a bad request is the caller's
@@ -122,6 +125,11 @@ def request_with_retries(method: str, url: str, attempts: int | None = None,
 
     `attempts=None` means "use FORGE3D_HOSTED_RETRIES" (default 3). The adapters
     used to hardcode 3, which silently ignored the documented setting.
+
+    `idempotent=False` is for job-creation POSTs. There, a retry after an
+    ambiguous timeout can buy a second generation, so only connection failures
+    that happen *before* the request could have been accepted are retried — never
+    a timeout, never a 5xx (which may mean "created, then failed to respond").
     """
     if attempts is None:
         try:
@@ -135,11 +143,22 @@ def request_with_retries(method: str, url: str, attempts: int | None = None,
         try:
             resp = requests.request(method, url, **kwargs)
             if resp.status_code >= 500:
+                if not idempotent:
+                    raise ProviderError(
+                        f"{method} {url} returned {resp.status_code}; the request may "
+                        f"already have been accepted — not retrying"
+                    )
                 raise requests.RequestException(f"server error {resp.status_code}")
             return resp
         except requests.RequestException as exc:
             last = exc
             if attempt == attempts - 1:
+                break
+            # Only a failure to *connect* is provably pre-acceptance. A read
+            # timeout on a POST may mean the provider created the job already.
+            if not idempotent and isinstance(
+                exc, (requests.Timeout, requests.ConnectionError)
+            ) and not isinstance(exc, requests.ConnectTimeout):
                 break
             time.sleep(delay + random.uniform(0, delay * 0.4))
             delay = min(delay * 2, 30.0)
@@ -148,6 +167,24 @@ def request_with_retries(method: str, url: str, attempts: int | None = None,
 
 class ProviderError(RuntimeError):
     """A provider call failed in a way the caller should see verbatim."""
+
+
+class AmbiguousSubmission(ProviderError):
+    """A job-creation request timed out after it may have been accepted.
+
+    The dangerous case: the provider created the job, the response was lost, and
+    a blind retry creates a *second* paid job. Callers must reconcile with the
+    provider rather than retry. `idempotency_key` is what to reconcile with.
+    """
+
+    def __init__(self, provider: str, idempotency_key: str, detail: str = "") -> None:
+        self.provider = provider
+        self.idempotency_key = idempotency_key
+        super().__init__(
+            f"{provider}: submission outcome unknown — the request may have been "
+            f"accepted before the connection failed. Do NOT retry blindly; check the "
+            f"provider dashboard for key {idempotency_key}. {detail}".strip()
+        )
 
 
 class GenerationProvider(ABC):
@@ -217,10 +254,20 @@ class GenerationProvider(ABC):
         out_dir.mkdir(parents=True, exist_ok=True)
         suffix = Path(job.asset_url.split("?")[0]).suffix or ".glb"
         target = out_dir / f"{name}{suffix}"
+        limit = int(os.environ.get("FORGE3D_MAX_DOWNLOAD_MB", "512")) * 1024 * 1024
+        written = 0
         with request_with_retries("GET", job.asset_url, stream=True, timeout=300) as resp:
             resp.raise_for_status()
             with open(target, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=1 << 16):
+                    written += len(chunk)
+                    if written > limit:
+                        fh.close()
+                        target.unlink(missing_ok=True)
+                        raise ProviderError(
+                            f"{self.name}: download exceeded "
+                            f"{limit // (1024 * 1024)} MB (FORGE3D_MAX_DOWNLOAD_MB)"
+                        )
                     fh.write(chunk)
         return target
 
@@ -233,6 +280,31 @@ class GenerationProvider(ABC):
         }
 
     # -- helpers ---------------------------------------------------------
+    def submit_request(self, url: str, payload: dict, timeout: int = 60,
+                       attempts: int | None = None) -> requests.Response:
+        """POST a job-creation request safely.
+
+        Adds an `Idempotency-Key` header (providers that support it will dedupe),
+        refuses to retry an ambiguous failure, and converts a timeout into
+        `AmbiguousSubmission` so the caller can reconcile instead of double-paying.
+        """
+        import uuid
+
+        key = uuid.uuid4().hex
+        headers = dict(self._headers())
+        headers["Idempotency-Key"] = key
+        try:
+            return request_with_retries(
+                "POST", url, attempts=attempts, idempotent=False,
+                json=payload, headers=headers, timeout=timeout,
+            )
+        except requests.Timeout as exc:
+            raise AmbiguousSubmission(self.name, key, str(exc)) from exc
+        except ProviderError:
+            raise
+        except requests.RequestException as exc:
+            raise ProviderError(f"{self.name}: could not submit ({exc})") from exc
+
     def _json(self, resp: requests.Response) -> dict:
         try:
             return resp.json()
