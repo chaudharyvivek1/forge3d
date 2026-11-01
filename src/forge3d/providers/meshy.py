@@ -70,8 +70,7 @@ class MeshyProvider(GenerationProvider):
                 "art_style": request.art_style or "realistic",
                 "should_remesh": True,
             }
-        resp = request_with_retries("POST", self.base_url() + path,
-                                    json=payload, headers=self._headers(), timeout=60)
+        resp = self.submit_request(self.base_url() + path, payload)
         self._raise_for_status(resp, "submit")
         data = self._json(resp)
 
