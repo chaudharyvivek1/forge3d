@@ -62,9 +62,7 @@ class RodinProvider(GenerationProvider):
         if not payload.get("prompt") and not payload.get("image_urls"):
             raise ProviderError("rodin needs a prompt or at least one image")
 
-        resp = request_with_retries("POST", f"{self.base_url()}/api/v1/rodin",
-                                    json=payload,
-                                    headers=self._headers(), timeout=60)
+        resp = self.submit_request(f"{self.base_url()}/api/v1/rodin", payload)
         self._raise_for_status(resp, "submit")
         data = self._json(resp)
 
