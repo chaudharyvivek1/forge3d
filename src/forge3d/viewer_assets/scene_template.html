@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>__TITLE__</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #05060a; overflow: hidden;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  canvas { display: block; }
+  #hud { position: fixed; top: 14px; left: 14px; padding: 12px 14px; border-radius: 12px;
+    background: rgba(10,12,18,.72); border: 1px solid rgba(255,255,255,.08);
+    backdrop-filter: blur(10px); color: #e8ecf2; font-size: 12px; line-height: 1.6;
+    max-width: 280px; pointer-events: none; z-index: 10; }
+  #hud h1 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+  #hud .row { display: flex; justify-content: space-between; gap: 14px; color: #98a2b3; }
+  #hud .row b { color: #e8ecf2; font-weight: 500; }
+  #hud .keys { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.07);
+    color: #667085; font-size: 11px; }
+  #bar { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 10; }
+  #bar button { appearance: none; border: 1px solid rgba(255,255,255,.1);
+    background: rgba(10,12,18,.82); color: #cfd6e0; padding: 8px 14px; border-radius: 9px;
+    font-size: 12px; cursor: pointer; backdrop-filter: blur(8px); transition: .15s; }
+  #bar button:hover { background: rgba(28,34,46,.95); color: #fff; }
+  #bar button.on { border-color: #d4693a; color: #ff9d6b; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; z-index: 15;
+    color: #667085; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; }
+  #loading.hide { display: none; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <h1>__TITLE__</h1>
+  <div id="meta"></div>
+  <div class="keys">drag to orbit · scroll to zoom · R rotate · S snapshot · L labels</div>
+</div>
+<div id="bar">
+  <button id="btn-rotate" class="on">auto-rotate</button>
+  <button id="btn-stars" class="on">stars</button>
+  <button id="btn-shot">snapshot</button>
+  <button id="btn-reset">reset view</button>
+</div>
+<div id="loading">building scene</div>
+
+<script>
+  // Explain a blocked CDN instead of showing an empty canvas.
+  window.addEventListener('error', function (e) {
+    var el = document.getElementById('loading');
+    if (!el || el.classList.contains('hide')) return;
+    var src = (e.target && (e.target.src || e.target.href)) || 'the three.js CDN';
+    el.innerHTML = 'Could not load the 3D engine from<br><code>' + src +
+      '</code><br><br>Set <code>FORGE3D_THREE_URL</code> to a local mirror and rebuild.';
+    el.style.cssText += 'text-transform:none;letter-spacing:0;line-height:1.7;text-align:center;padding:24px';
+  }, true);
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "__THREE_BASE__/build/three.module.js",
+    "three/addons/": "__THREE_BASE__/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const ITEMS = __SCENE_JSON__;
+const META = __META_JSON__;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05060a);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.05).texture;
+
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 200000);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.055;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
+
+// One hard sun: planets read as lit bodies, not as floating spheres.
+const sun = new THREE.DirectionalLight(0xfff1e0, 3.2);
+sun.position.set(-1, 0.35, 0.6);
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x2a2f3a, 0.9));
+
+// --- starfield -----------------------------------------------------------
+function makeStars(count = 9000, radius = 4000) {
+  const positions = new Float32Array(count * 3);
+  const colours = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const u = Math.random() * 2 - 1;
+    const theta = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(1 - u * u);
+    positions[i * 3] = Math.cos(theta) * r * radius;
+    positions[i * 3 + 1] = u * radius;
+    positions[i * 3 + 2] = Math.sin(theta) * r * radius;
+    const t = 0.72 + Math.random() * 0.28;
+    colours[i * 3] = t;
+    colours[i * 3 + 1] = t;
+    colours[i * 3 + 2] = Math.min(1, t + Math.random() * 0.08);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+  const m = new THREE.PointsMaterial({ size: radius / 340, sizeAttenuation: true,
+    vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false });
+  return new THREE.Points(g, m);
+}
+const stars = makeStars();
+scene.add(stars);
+
+// --- models --------------------------------------------------------------
+const loader = new GLTFLoader();
+const root = new THREE.Group();
+scene.add(root);
+let loaded = 0;
+let totalFaces = 0;
+
+function place(obj, item) {
+  const p = item.position || [0, 0, 0];
+  obj.position.set(p[0], p[1], p[2]);
+  const s = item.scale ?? 1;
+  obj.scale.setScalar(s);
+  const r = item.rotation || [0, 0, 0];
+  obj.rotation.set(r[0], r[1], r[2]);
+  obj.name = item.name || 'model';
+}
+
+function countFaces(obj) {
+  let n = 0;
+  obj.traverse((o) => {
+    if (o.isMesh && o.geometry) {
+      const i = o.geometry.index;
+      n += i ? i.count / 3 : (o.geometry.attributes.position?.count || 0) / 3;
+    }
+  });
+  return n;
+}
+
+ITEMS.forEach((item) => {
+  loader.load(item.uri, (gltf) => {
+    const obj = gltf.scene;
+    place(obj, item);
+    obj.traverse((o) => {
+      if (o.isMesh) {
+        o.material.envMapIntensity = 0.55;
+        if (o.material.normalScale) o.material.normalScale.set(1.4, 1.4);
+      }
+    });
+    root.add(obj);
+    totalFaces += countFaces(obj);
+    loaded += 1;
+    if (loaded === ITEMS.length) finish();
+  }, undefined, (err) => {
+    console.error('failed to load', item.name, err);
+    loaded += 1;
+    if (loaded === ITEMS.length) finish();
+  });
+});
+
+function finish() {
+  // Frame everything: the scene is authored in world units, so fit the bounds
+  // rather than assuming a camera distance.
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const dist = (maxDim / (2 * Math.tan((camera.fov * Math.PI) / 360))) * 1.35;
+
+  controls.target.copy(centre);
+  camera.position.set(centre.x + dist * 0.75, centre.y + dist * 0.3, centre.z + dist * 0.85);
+  camera.near = maxDim / 4000;
+  camera.far = maxDim * 200;
+  camera.updateProjectionMatrix();
+  controls.update();
+
+  stars.scale.setScalar(maxDim / 60);
+
+  const rows = [
+    ['bodies', String(ITEMS.length)],
+    ['triangles', Math.round(totalFaces).toLocaleString()],
+    ['scene size', `${maxDim.toFixed(0)} units`],
+    ['source', META.source || 'forge3d'],
+  ];
+  document.getElementById('meta').innerHTML = rows
+    .map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join('');
+
+  document.getElementById('loading').classList.add('hide');
+  window.forge3d = { scene, camera, renderer, controls, root, stars, sun };
+  document.dispatchEvent(new CustomEvent('forge3d:loaded', { detail: { bodies: ITEMS.length } }));
+}
+
+// --- controls ------------------------------------------------------------
+const btnRotate = document.getElementById('btn-rotate');
+const btnStars = document.getElementById('btn-stars');
+
+btnRotate.onclick = () => {
+  controls.autoRotate = !controls.autoRotate;
+  btnRotate.classList.toggle('on', controls.autoRotate);
+};
+btnStars.onclick = () => {
+  stars.visible = !stars.visible;
+  btnStars.classList.toggle('on', stars.visible);
+};
+document.getElementById('btn-shot').onclick = () => {
+  renderer.render(scene, camera);
+  const a = document.createElement('a');
+  a.href = renderer.domElement.toDataURL('image/png');
+  a.download = (META.name || 'scene') + '.png';
+  a.click();
+};
+document.getElementById('btn-reset').onclick = () => finish();
+
+addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') btnRotate.click();
+  if (e.key === 's' || e.key === 'S') document.getElementById('btn-shot').click();
+  if (e.key === 'l' || e.key === 'L') btnStars.click();
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+(function tick() {
+  requestAnimationFrame(tick);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
