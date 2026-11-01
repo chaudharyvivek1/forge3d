@@ -84,6 +84,7 @@ def _run_guarded(code: str, namespace: dict, timeout: int):
 
 class ProceduralBackend(Backend):
     name = "procedural"
+    executes_user_code = True
     kind = "local"
     requires: tuple[str, ...] = ("trimesh", "numpy")
     capabilities = {
