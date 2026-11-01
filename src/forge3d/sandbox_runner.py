@@ -53,9 +53,27 @@ def _apply_limits(mem_mb: int) -> list[str]:
         pass
 
     try:
-        # No new files beyond the two we were told to write, and no core dumps.
+        # No core dumps.
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         applied.append("no core dumps")
+    except (ValueError, OSError):
+        pass
+
+    try:
+        # Bound what the child can write: a runaway loop that appends to a file
+        # should hit a wall, not fill the disk. 512 MiB is far more than any
+        # mesh export needs.
+        fsize = int(os.environ.get("FORGE3D_MAX_FILE_MB", "512")) * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
+        applied.append(f"file size {fsize // (1024 * 1024)} MiB")
+    except (ValueError, OSError):
+        pass
+
+    try:
+        # File descriptors: enough for trimesh's temp files, not enough to hold
+        # a thousand sockets open.
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+        applied.append("256 file descriptors")
     except (ValueError, OSError):
         pass
 
