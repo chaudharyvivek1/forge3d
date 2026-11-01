@@ -502,6 +502,132 @@ def make_viewer(path: str, out_html: str | None = None, title: str | None = None
 
 
 @mcp.tool
+def create_planet(
+    radius: float = 100.0,
+    seed: int = 0,
+    subdivisions: int = 5,
+    crater_density: float = 0.55,
+    canyon: bool = False,
+    canyon_depth: float = 0.05,
+    roughness: float = 1.0,
+    palette: str = "mars",
+    texture_resolution: int = 512,
+    name: str = "planet",
+    purpose: str = "web",
+    poly_budget: int | None = None,
+    render_previews: bool = True,
+    make_viewer: bool = True,
+) -> dict:
+    """Generate a procedural rocky planet: terrain, craters, optional canyon, baked PBR maps.
+
+    Deterministic — the same seed always produces the same planet, so a website
+    hero image is reproducible. Writes albedo, normal and metallic-roughness
+    textures with correct spherical UVs and embeds them in the GLB.
+
+    Use this instead of writing noise code inside `create_model`: the crater
+    profile, seamless 3D noise sampling and UV layout are already correct here,
+    and a hand-rolled version usually gets at least one of them wrong.
+
+    radius is in world units. subdivisions: 4 = ~5k faces, 5 = ~20k, 6 = ~82k.
+    texture_resolution 0 disables baking (vertex colours only, much smaller file).
+    """
+    from .geometry.planets import PlanetParams, attach_pbr, generate_planet
+
+    store = _store()
+    job = store.create("planet", {"name": name, "seed": seed, "radius": radius})
+    job.status = "running"
+    store.save(job)
+
+    out_dir = _models_dir() / name / job.id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    params = PlanetParams(
+        radius=float(radius), seed=int(seed),
+        subdivisions=max(2, min(7, int(subdivisions))),
+        crater_density=float(crater_density), canyon=bool(canyon),
+        canyon_depth=float(canyon_depth), roughness=float(roughness),
+        palette=palette, texture_resolution=int(texture_resolution), name=name,
+    )
+
+    try:
+        mesh, info = generate_planet(params, out_dir=out_dir)
+        if info["textures"]:
+            attach_pbr(mesh, info["textures"])
+        glb = out_dir / f"{name}.glb"
+        stl = out_dir / f"{name}.stl"
+        mesh.export(str(glb))
+        mesh.export(str(stl))
+    except Exception as exc:  # noqa: BLE001 - reported to the agent
+        store.fail(job, str(exc))
+        return {"ok": False, "job_id": job.id, "error": f"planet generation failed: {exc}"}
+
+    spec = ModelSpec(name=name, purpose=purpose, poly_budget=poly_budget, mode="local")
+    report = validate.validate(mesh, profile=spec.purpose, spec=spec)
+
+    previews: dict[str, str] = {}
+    if render_previews:
+        previews = render.render_views(mesh, out_dir / "previews", name=name,
+                                       views=("iso", "front")).get("previews", {})
+
+    html_path = None
+    if make_viewer:
+        try:
+            html_path = str(viewer.build_viewer(glb, out_dir / f"{name}.html", spec=spec))
+        except Exception:
+            html_path = None
+
+    size_mb = round(glb.stat().st_size / (1024 * 1024), 2)
+    store.finish(job, str(glb), meta={"faces": info["faces"], "size_mb": size_mb})
+
+    return {
+        "ok": True,
+        "job_id": job.id,
+        "path": str(glb),
+        "stl": str(stl),
+        "viewer": html_path,
+        "previews": previews,
+        "planet": info,
+        "size_mb": size_mb,
+        "validation": {"ok": report.ok, "summary": report.summary()},
+        "next": ("call make_scene_viewer to place several planets in one page"
+                 if report.ok else "validation failed — inspect `previews` before shipping"),
+    }
+
+
+@mcp.tool
+def make_scene_viewer(
+    items: list[dict],
+    title: str = "forge3d scene",
+    out_html: str | None = None,
+) -> dict:
+    """Compose several models into ONE self-contained Three.js page.
+
+    Each item: {"path": "/abs/model.glb", "name": "mars-prime",
+                "position": [0,0,0], "scale": 1.0, "rotation": [0,0,0]}
+
+    Every mesh is embedded as a data URI, so the page needs no server and no
+    hosting. Watch the size: four textured planets is ~3.5 MB — fine to hand to
+    someone, heavy as a website hero. For production, host the GLBs and use the
+    `forge3d-viewer` custom element instead.
+    """
+    if not items:
+        return {"ok": False, "error": "no items", "hint": "pass at least one {path: ...} entry"}
+    dst = Path(out_html) if out_html else get_settings().ensure_workdir() / "viewer" / "scene.html"
+    try:
+        out = viewer.build_scene_viewer(items, dst, title=title)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"could not build scene viewer: {exc}"}
+    size_mb = round(out.stat().st_size / (1024 * 1024), 2)
+    result = {"ok": True, "html": str(out), "bodies": len(items), "size_mb": size_mb}
+    if size_mb > 8:
+        result["warning"] = (
+            f"{size_mb} MB page — every mesh is embedded. For a website hero, host the "
+            "GLBs and embed the forge3d-viewer custom element instead."
+        )
+    return result
+
+
+@mcp.tool
 def model_card(path: str) -> dict:
     """A ~300-token summary of a model file — the only safe way to describe it in context.
 
