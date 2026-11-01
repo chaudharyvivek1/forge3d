@@ -24,7 +24,7 @@ EXIT_BAD_GEOMETRY = 5
 EXIT_EXPORT_FAILED = 6
 
 
-def _apply_limits(mem_mb: int) -> list[str]:
+def apply_limits(mem_mb: int) -> list[str]:
     """Best-effort resource ceilings. Returns what was applied, for the log.
 
     POSIX only: Windows has no `resource` module, so there the parent's hard kill
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from .spec import ModelSpec
 
-    limits = _apply_limits(mem_mb)
+    limits = apply_limits(mem_mb)
     print(f"forge3d-runner: limits: {', '.join(limits)}", file=sys.stderr)
 
     spec = ModelSpec.from_dict(json.loads(spec_json))
