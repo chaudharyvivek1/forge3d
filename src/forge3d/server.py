@@ -27,7 +27,7 @@ from . import backends, context, meshio, platform_support, render, repair, valid
 from . import handoff as handoff_mod
 from .config import get_settings
 from .jobs import JobStore
-from .spec import ModelSpec
+from .spec import ModelSpec  # noqa: F401 - re-exported for callers of this module
 
 mcp = FastMCP(
     "forge3d",
@@ -198,11 +198,15 @@ def create_model(
         materials=materials, seed=seed,
     )
     store = _store()
+    store.recover_stale()
     job = store.create(backend, spec.to_dict())
     job.status = "running"
     store.save(job)
 
-    out_dir = _models_dir() / spec.name
+    # Job-scoped output directory. Two agents generating "chair" concurrently
+    # used to write to the same path and silently overwrite each other; the
+    # result is still deterministic per job id, and the full path is returned.
+    out_dir = _models_dir() / spec.name / job.id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -522,13 +526,28 @@ def review_model(path: str, spec: dict | None = None, previews: bool = True) -> 
 
 
 def main() -> None:
+    """Run the MCP server.
+
+    stdio (default) is for a local agent you already trust. HTTP is for remote
+    agents and app integration, and it is deliberately harder to expose: it binds
+    loopback by default, refuses a public interface without a token, and forces
+    subprocess isolation for model code.
+    """
+    import os
     import sys
 
+    from .http_server import parse_http_args, serve
+
     argv = sys.argv[1:]
-    if "--http" in argv:
-        idx = argv.index("--http")
-        port = int(argv[idx + 1]) if len(argv) > idx + 1 and argv[idx + 1].isdigit() else 8000
-        mcp.run(transport="http", host="0.0.0.0", port=port)
+    if any(a == "--http" or a.startswith("--http=") for a in argv):
+        cfg = parse_http_args(argv)
+        # An HTTP caller is not necessarily trusted: run model code in a killable
+        # child unless the operator explicitly chose otherwise.
+        os.environ.setdefault("FORGE3D_TRANSPORT", "http")
+        if os.environ.get("FORGE3D_EXEC_MODE") in (None, "", "auto"):
+            os.environ["FORGE3D_EXEC_MODE"] = "subprocess"
+        get_settings(refresh=True)
+        serve(mcp, cfg)
     else:
         mcp.run()
 
