@@ -28,6 +28,21 @@ import trimesh
 from ..spec import ModelSpec
 from .base import Backend, BackendResult
 
+_TEMP_DIRS: list[Path] = []
+
+
+def _cleanup_temp() -> None:
+    """Remove reference images downloaded for this build.
+
+    Without this every remote-image generation left a directory behind, so a
+    long-running server accumulated them without bound.
+    """
+    import shutil
+
+    while _TEMP_DIRS:
+        path = _TEMP_DIRS.pop()
+        shutil.rmtree(path, ignore_errors=True)
+
 
 class ImageFetchRefused(RuntimeError):
     """A remote image was refused by the URL guard, with a reason."""
@@ -118,6 +133,14 @@ class ImageBackend(Backend):
         grid = clamp_grid(requested_grid, spec.poly_budget)
 
         try:
+            return self._build(img, spec, resolved, grid, kwargs, out_dir,
+                               requested_grid, image_path)
+        finally:
+            _cleanup_temp()
+
+    def _build(self, img, spec, resolved, grid, kwargs, out_dir,
+               requested_grid, image_path):
+        try:
             if resolved == "silhouette":
                 mesh, meta = self._silhouette(img, spec, grid, kwargs)
             else:
@@ -176,6 +199,7 @@ class ImageBackend(Backend):
 
             try:
                 tmp_dir = Path(tempfile.mkdtemp(prefix="forge3d-image-"))
+                _TEMP_DIRS.append(tmp_dir)
                 return fetch_image(str(candidate), tmp_dir / "input.png")
             except UnsafeURLError as exc:
                 raise ImageFetchRefused(str(exc)) from exc
