@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[render,dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Test
+        env:
+          FORGE3D_ALLOW_CODE_EXEC: "true"
+        run: pytest -q
+
+      # The engines that need external binaries are skipped by the test suite
+      # when absent — this job proves the suite is honest on a bare machine,
+      # and the job below proves it still passes with OpenSCAD present.
+  test-with-openscad:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OpenSCAD
+        run: sudo apt-get update && sudo apt-get install -y openscad
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[render,dev]"
+
+      - name: Test with OpenSCAD available
+        run: pytest -q -k "openscad or auto"

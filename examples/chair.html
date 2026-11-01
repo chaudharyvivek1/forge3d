@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>chair</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b0d10; overflow: hidden;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 14px; left: 14px; padding: 12px 14px; border-radius: 12px;
+    background: rgba(16,19,24,.78); border: 1px solid rgba(255,255,255,.08);
+    backdrop-filter: blur(10px); color: #e8ecf2; font-size: 12px; line-height: 1.55;
+    max-width: 300px; pointer-events: none; z-index: 10;
+  }
+  #hud h1 { margin: 0 0 6px; font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+  #hud .row { display: flex; justify-content: space-between; gap: 14px; color: #9aa4b2; }
+  #hud .row b { color: #e8ecf2; font-weight: 500; }
+  #hud .keys { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.07);
+    color: #6f7a89; font-size: 11px; }
+  #bar { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 10; }
+  #bar button {
+    appearance: none; border: 1px solid rgba(255,255,255,.1); background: rgba(16,19,24,.85);
+    color: #cfd6e0; padding: 8px 14px; border-radius: 9px; font-size: 12px; cursor: pointer;
+    backdrop-filter: blur(8px); transition: .15s;
+  }
+  #bar button:hover { background: rgba(34,40,50,.95); color: #fff; }
+  #bar button.on { border-color: #4f8cff; color: #8fb4ff; }
+  #drop {
+    position: fixed; inset: 0; display: none; place-items: center; z-index: 20;
+    background: rgba(11,13,16,.86); color: #cfd6e0; font-size: 14px; text-align: center;
+    border: 2px dashed #33405a; margin: 12px; border-radius: 16px;
+  }
+  #drop.show { display: grid; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; z-index: 15;
+    color: #6f7a89; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+  #loading.hide { display: none; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <h1>chair</h1>
+  <div id="meta"></div>
+  <div class="keys">drag to orbit · scroll to zoom · W wireframe · G grid · S snapshot</div>
+</div>
+<div id="bar">
+  <button id="btn-rotate" class="on">auto-rotate</button>
+  <button id="btn-wire">wireframe</button>
+  <button id="btn-grid" class="on">grid</button>
+  <button id="btn-shot">snapshot</button>
+  <button id="btn-reset">reset view</button>
+</div>
+<div id="drop">drop a .glb / .gltf file to inspect it</div>
+<div id="loading">building scene</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const MODEL_URI = "data:model/gltf-binary;base64,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";
+const META = {"name": "chair", "units": "mm", "source": "chair.glb", "purpose": "game", "target_dims": [450.0, 480.0, 850.0]};
+
+const container = document.body;
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0d10);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.01, 10000);
+camera.position.set(2.2, 1.6, 2.6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.1;
+
+const key = new THREE.DirectionalLight(0xffffff, 2.4);
+key.position.set(4, 7, 5);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.bias = -0.0006;
+scene.add(key);
+scene.add(new THREE.DirectionalLight(0x9fc0ff, 0.7).translateX(-6).translateY(3).translateZ(-4));
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x14171c, 0.55));
+
+const grid = new THREE.GridHelper(10, 20, 0x2a3444, 0x1a2029);
+grid.material.transparent = true;
+grid.material.opacity = 0.75;
+scene.add(grid);
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.ShadowMaterial({ opacity: 0.32 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const root = new THREE.Group();
+scene.add(root);
+
+let currentModel = null;
+let frame = null;
+
+function disposeModel() {
+  if (!currentModel) return;
+  root.remove(currentModel);
+  currentModel.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((m) => { for (const k in m) { const v = m[k]; if (v && v.isTexture) v.dispose(); } m.dispose(); });
+    }
+  });
+  currentModel = null;
+}
+
+function fitCamera(object) {
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const dist = maxDim / (2 * Math.tan((camera.fov * Math.PI) / 360)) * 1.9;
+
+  controls.target.copy(center);
+  camera.near = maxDim / 500;
+  camera.far = maxDim * 500;
+  camera.position.set(center.x + dist * 0.72, center.y + dist * 0.52, center.z + dist * 0.72);
+  camera.updateProjectionMatrix();
+  controls.update();
+
+  grid.scale.setScalar(maxDim / 5);
+  ground.position.y = box.min.y;
+  return { size, center };
+}
+
+function addModel(object, meta) {
+  disposeModel();
+  object.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+      if (o.material && !o.material.envMapIntensity) o.material.envMapIntensity = 0.9;
+    }
+  });
+  currentModel = object;
+  root.add(object);
+  const fitted = fitCamera(object);
+
+  let tris = 0;
+  object.traverse((o) => {
+    if (o.isMesh && o.geometry) {
+      const idx = o.geometry.index;
+      tris += idx ? idx.count / 3 : (o.geometry.attributes.position?.count || 0) / 3;
+    }
+  });
+
+  const size = fitted?.size || new THREE.Vector3();
+  const rows = [
+    ['triangles', Math.round(tris).toLocaleString()],
+    ['dimensions', `${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)}`],
+    ['units', (meta && meta.units) || 'scene units'],
+    ['source', (meta && meta.source) || 'embedded glb'],
+  ];
+  if (meta && meta.validation) rows.push(['validation', meta.validation]);
+  document.getElementById('meta').innerHTML = rows
+    .map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`)
+    .join('');
+
+  window.forge3d = { scene, camera, renderer, controls, model: object };
+  document.getElementById('loading').classList.add('hide');
+  document.dispatchEvent(new CustomEvent('forge3d:loaded', { detail: { tris } }));
+}
+
+const loader = new GLTFLoader();
+
+function loadFromUri(uri, meta) {
+  if (!uri) {
+    document.getElementById('loading').classList.add('hide');
+    document.getElementById('drop').classList.add('show');
+    return;
+  }
+  loader.load(
+    uri,
+    (gltf) => addModel(gltf.scene, meta),
+    undefined,
+    (err) => {
+      document.getElementById('loading').textContent = 'could not load model — ' + (err?.message || 'unknown error');
+    }
+  );
+}
+
+loadFromUri(MODEL_URI, META);
+
+// ---- interaction -----------------------------------------------------
+const btnRotate = document.getElementById('btn-rotate');
+const btnWire = document.getElementById('btn-wire');
+const btnGrid = document.getElementById('btn-grid');
+
+function toggleRotate() {
+  controls.autoRotate = !controls.autoRotate;
+  btnRotate.classList.toggle('on', controls.autoRotate);
+}
+function toggleWire() {
+  if (!currentModel) return;
+  let on = false;
+  currentModel.traverse((o) => { if (o.isMesh && o.material && o.material.wireframe) on = true; });
+  currentModel.traverse((o) => {
+    if (o.isMesh && o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((m) => { m.wireframe = !on; });
+    }
+  });
+  btnWire.classList.toggle('on', !on);
+}
+function toggleGrid() {
+  grid.visible = !grid.visible;
+  ground.visible = grid.visible;
+  btnGrid.classList.toggle('on', grid.visible);
+}
+function snapshot() {
+  renderer.render(scene, camera);
+  const a = document.createElement('a');
+  a.href = renderer.domElement.toDataURL('image/png');
+  a.download = (META?.name || 'model') + '.png';
+  a.click();
+}
+function resetView() { if (currentModel) fitCamera(currentModel); }
+
+btnRotate.onclick = toggleRotate;
+btnWire.onclick = toggleWire;
+btnGrid.onclick = toggleGrid;
+document.getElementById('btn-shot').onclick = snapshot;
+document.getElementById('btn-reset').onclick = resetView;
+
+addEventListener('keydown', (e) => {
+  if (e.key === 'w' || e.key === 'W') toggleWire();
+  if (e.key === 'g' || e.key === 'G') toggleGrid();
+  if (e.key === 's' || e.key === 'S') snapshot();
+  if (e.key === 'r' || e.key === 'R') resetView();
+});
+
+// drag & drop a local file
+addEventListener('dragover', (e) => { e.preventDefault(); document.getElementById('drop').classList.add('show'); });
+addEventListener('dragleave', (e) => {
+  if (e.relatedTarget === null) document.getElementById('drop').classList.remove('show');
+});
+addEventListener('drop', (e) => {
+  e.preventDefault();
+  document.getElementById('drop').classList.remove('show');
+  const file = e.dataTransfer.files?.[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  loadFromUri(url, { name: file.name, source: 'dropped file' });
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+function tick() {
+  frame = requestAnimationFrame(tick);
+  controls.update();
+  renderer.render(scene, camera);
+}
+tick();
+</script>
+</body>
+</html>

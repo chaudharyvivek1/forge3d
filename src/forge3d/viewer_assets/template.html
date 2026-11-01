@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>__TITLE__</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b0d10; overflow: hidden;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 14px; left: 14px; padding: 12px 14px; border-radius: 12px;
+    background: rgba(16,19,24,.78); border: 1px solid rgba(255,255,255,.08);
+    backdrop-filter: blur(10px); color: #e8ecf2; font-size: 12px; line-height: 1.55;
+    max-width: 300px; pointer-events: none; z-index: 10;
+  }
+  #hud h1 { margin: 0 0 6px; font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+  #hud .row { display: flex; justify-content: space-between; gap: 14px; color: #9aa4b2; }
+  #hud .row b { color: #e8ecf2; font-weight: 500; }
+  #hud .keys { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.07);
+    color: #6f7a89; font-size: 11px; }
+  #bar { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 10; }
+  #bar button {
+    appearance: none; border: 1px solid rgba(255,255,255,.1); background: rgba(16,19,24,.85);
+    color: #cfd6e0; padding: 8px 14px; border-radius: 9px; font-size: 12px; cursor: pointer;
+    backdrop-filter: blur(8px); transition: .15s;
+  }
+  #bar button:hover { background: rgba(34,40,50,.95); color: #fff; }
+  #bar button.on { border-color: #4f8cff; color: #8fb4ff; }
+  #drop {
+    position: fixed; inset: 0; display: none; place-items: center; z-index: 20;
+    background: rgba(11,13,16,.86); color: #cfd6e0; font-size: 14px; text-align: center;
+    border: 2px dashed #33405a; margin: 12px; border-radius: 16px;
+  }
+  #drop.show { display: grid; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; z-index: 15;
+    color: #6f7a89; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+  #loading.hide { display: none; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <h1>__TITLE__</h1>
+  <div id="meta"></div>
+  <div class="keys">drag to orbit · scroll to zoom · W wireframe · G grid · S snapshot</div>
+</div>
+<div id="bar">
+  <button id="btn-rotate" class="on">auto-rotate</button>
+  <button id="btn-wire">wireframe</button>
+  <button id="btn-grid" class="on">grid</button>
+  <button id="btn-shot">snapshot</button>
+  <button id="btn-reset">reset view</button>
+</div>
+<div id="drop">drop a .glb / .gltf file to inspect it</div>
+<div id="loading">building scene</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const MODEL_URI = "__MODEL_URI__";
+const META = __META_JSON__;
+
+const container = document.body;
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0d10);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.01, 10000);
+camera.position.set(2.2, 1.6, 2.6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.1;
+
+const key = new THREE.DirectionalLight(0xffffff, 2.4);
+key.position.set(4, 7, 5);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.bias = -0.0006;
+scene.add(key);
+scene.add(new THREE.DirectionalLight(0x9fc0ff, 0.7).translateX(-6).translateY(3).translateZ(-4));
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x14171c, 0.55));
+
+const grid = new THREE.GridHelper(10, 20, 0x2a3444, 0x1a2029);
+grid.material.transparent = true;
+grid.material.opacity = 0.75;
+scene.add(grid);
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.ShadowMaterial({ opacity: 0.32 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const root = new THREE.Group();
+scene.add(root);
+
+let currentModel = null;
+let frame = null;
+
+function disposeModel() {
+  if (!currentModel) return;
+  root.remove(currentModel);
+  currentModel.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((m) => { for (const k in m) { const v = m[k]; if (v && v.isTexture) v.dispose(); } m.dispose(); });
+    }
+  });
+  currentModel = null;
+}
+
+function fitCamera(object) {
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const dist = maxDim / (2 * Math.tan((camera.fov * Math.PI) / 360)) * 1.9;
+
+  controls.target.copy(center);
+  camera.near = maxDim / 500;
+  camera.far = maxDim * 500;
+  camera.position.set(center.x + dist * 0.72, center.y + dist * 0.52, center.z + dist * 0.72);
+  camera.updateProjectionMatrix();
+  controls.update();
+
+  grid.scale.setScalar(maxDim / 5);
+  ground.position.y = box.min.y;
+  return { size, center };
+}
+
+function addModel(object, meta) {
+  disposeModel();
+  object.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+      if (o.material && !o.material.envMapIntensity) o.material.envMapIntensity = 0.9;
+    }
+  });
+  currentModel = object;
+  root.add(object);
+  const fitted = fitCamera(object);
+
+  let tris = 0;
+  object.traverse((o) => {
+    if (o.isMesh && o.geometry) {
+      const idx = o.geometry.index;
+      tris += idx ? idx.count / 3 : (o.geometry.attributes.position?.count || 0) / 3;
+    }
+  });
+
+  const size = fitted?.size || new THREE.Vector3();
+  const rows = [
+    ['triangles', Math.round(tris).toLocaleString()],
+    ['dimensions', `${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)}`],
+    ['units', (meta && meta.units) || 'scene units'],
+    ['source', (meta && meta.source) || 'embedded glb'],
+  ];
+  if (meta && meta.validation) rows.push(['validation', meta.validation]);
+  document.getElementById('meta').innerHTML = rows
+    .map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`)
+    .join('');
+
+  window.forge3d = { scene, camera, renderer, controls, model: object };
+  document.getElementById('loading').classList.add('hide');
+  document.dispatchEvent(new CustomEvent('forge3d:loaded', { detail: { tris } }));
+}
+
+const loader = new GLTFLoader();
+
+function loadFromUri(uri, meta) {
+  if (!uri) {
+    document.getElementById('loading').classList.add('hide');
+    document.getElementById('drop').classList.add('show');
+    return;
+  }
+  loader.load(
+    uri,
+    (gltf) => addModel(gltf.scene, meta),
+    undefined,
+    (err) => {
+      document.getElementById('loading').textContent = 'could not load model — ' + (err?.message || 'unknown error');
+    }
+  );
+}
+
+loadFromUri(MODEL_URI, META);
+
+// ---- interaction -----------------------------------------------------
+const btnRotate = document.getElementById('btn-rotate');
+const btnWire = document.getElementById('btn-wire');
+const btnGrid = document.getElementById('btn-grid');
+
+function toggleRotate() {
+  controls.autoRotate = !controls.autoRotate;
+  btnRotate.classList.toggle('on', controls.autoRotate);
+}
+function toggleWire() {
+  if (!currentModel) return;
+  let on = false;
+  currentModel.traverse((o) => { if (o.isMesh && o.material && o.material.wireframe) on = true; });
+  currentModel.traverse((o) => {
+    if (o.isMesh && o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((m) => { m.wireframe = !on; });
+    }
+  });
+  btnWire.classList.toggle('on', !on);
+}
+function toggleGrid() {
+  grid.visible = !grid.visible;
+  ground.visible = grid.visible;
+  btnGrid.classList.toggle('on', grid.visible);
+}
+function snapshot() {
+  renderer.render(scene, camera);
+  const a = document.createElement('a');
+  a.href = renderer.domElement.toDataURL('image/png');
+  a.download = (META?.name || 'model') + '.png';
+  a.click();
+}
+function resetView() { if (currentModel) fitCamera(currentModel); }
+
+btnRotate.onclick = toggleRotate;
+btnWire.onclick = toggleWire;
+btnGrid.onclick = toggleGrid;
+document.getElementById('btn-shot').onclick = snapshot;
+document.getElementById('btn-reset').onclick = resetView;
+
+addEventListener('keydown', (e) => {
+  if (e.key === 'w' || e.key === 'W') toggleWire();
+  if (e.key === 'g' || e.key === 'G') toggleGrid();
+  if (e.key === 's' || e.key === 'S') snapshot();
+  if (e.key === 'r' || e.key === 'R') resetView();
+});
+
+// drag & drop a local file
+addEventListener('dragover', (e) => { e.preventDefault(); document.getElementById('drop').classList.add('show'); });
+addEventListener('dragleave', (e) => {
+  if (e.relatedTarget === null) document.getElementById('drop').classList.remove('show');
+});
+addEventListener('drop', (e) => {
+  e.preventDefault();
+  document.getElementById('drop').classList.remove('show');
+  const file = e.dataTransfer.files?.[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  loadFromUri(url, { name: file.name, source: 'dropped file' });
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+function tick() {
+  frame = requestAnimationFrame(tick);
+  controls.update();
+  renderer.render(scene, camera);
+}
+tick();
+</script>
+</body>
+</html>

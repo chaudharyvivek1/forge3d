@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forge3d"
+version = "0.1.0"
+description = "One MCP server + agent skill that lets any AI agent design, validate and ship 3D models, then view them in Three.js."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Vivek Chaudhary" }]
+keywords = ["mcp", "3d", "ai-agent", "threejs", "blender", "openscad", "trimesh", "gltf"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
+
+dependencies = [
+  "trimesh>=4.4",
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "fastmcp>=2.0",
+  "pillow>=10.0",
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+render = ["matplotlib>=3.7"]
+cad = ["cadquery>=2.4"]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+forge3d = "forge3d.cli:main"
+forge3d-mcp = "forge3d.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+forge3d = ["viewer_assets/*.html", "viewer_assets/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Deliberately narrow. The broad rules ruff now enables by default (BLE001,
+# RUF012, S102, PLW1510) fire on patterns this codebase uses on purpose:
+# catching Exception so an agent never receives a traceback, module-level
+# capability constants, exec() as the procedural backend's entire mechanism,
+# and subprocess calls that inspect returncode themselves.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4"]
+ignore = [
+  "E501",   # line length is enforced by the formatter, not the linter
+  "B008",   # dataclass field(default_factory=...) in signatures
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/forge3d/backends/procedural.py" = ["S102"]
+"tests/*" = ["S101"]
+

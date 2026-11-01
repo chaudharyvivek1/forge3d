@@ -1,0 +1,29 @@
+# generated output — never commit meshes or previews
+.forge3d/
+output/
+*.stl
+*.obj
+*.glb
+*.gltf
+*.3mf
+*.ply
+*.png
+
+# keep the shipped demo assets — they are the point of the demo
+!docs/demo/*.png
+!docs/demo/*.glb
+!examples/*.html
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# secrets
+.env
