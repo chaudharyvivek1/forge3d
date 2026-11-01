@@ -141,6 +141,18 @@ class _Resp:
         return False
 
 
+def _fake_stream(monkeypatch, resp):
+    """Patch the transport, not `requests.get`.
+
+    fetch_bytes now pins the connection to a validated IP (urllib3) unless a proxy
+    is configured, so patching `requests.get` would only exercise one of the two
+    transports — and CI has no proxy.
+    """
+    monkeypatch.setattr("forge3d.netguard.open_stream",
+                        lambda url, **kw: (resp, False))
+    return resp
+
+
 def test_a_redirect_to_localhost_is_refused(monkeypatch):
     """The classic bypass: a public host that 302s to 127.0.0.1.
 
@@ -148,15 +160,13 @@ def test_a_redirect_to_localhost_is_refused(monkeypatch):
     not need DNS — the sandbox has none, and resolution failure would mask the
     redirect check being verified.
     """
-    monkeypatch.setattr("forge3d.netguard.requests.get",
-                        lambda url, **kw: _Resp(302, redirect_to="http://127.0.0.1/secret"))
+    _fake_stream(monkeypatch, _Resp(302, redirect_to="http://127.0.0.1/secret"))
     with pytest.raises(UnsafeURLError, match="loopback"):
         fetch_bytes("http://93.184.216.34/a.png")
 
 
 def test_a_declared_oversize_body_is_refused(monkeypatch):
-    monkeypatch.setattr("forge3d.netguard.requests.get",
-                        lambda url, **kw: _Resp(200, {"content-type": "image/png"},
+    _fake_stream(monkeypatch, _Resp(200, {"content-type": "image/png"},
                                                 body=b"x" * 5000))
     with pytest.raises(UnsafeURLError, match="exceeds|exceeded"):
         fetch_bytes("http://93.184.216.34/a.png", max_bytes=1024)
@@ -164,24 +174,21 @@ def test_a_declared_oversize_body_is_refused(monkeypatch):
 
 def test_a_streamed_oversize_body_is_cut_off(monkeypatch):
     """No Content-Length, so the cap has to be enforced while reading."""
-    monkeypatch.setattr("forge3d.netguard.requests.get",
-                        lambda url, **kw: _Resp(200, {"content-type": "image/png"},
+    _fake_stream(monkeypatch, _Resp(200, {"content-type": "image/png"},
                                                 body=b"x" * 200_000))
     with pytest.raises(UnsafeURLError, match="exceeded"):
         fetch_bytes("http://93.184.216.34/a.png", max_bytes=1000)
 
 
 def test_a_non_image_content_type_is_refused(monkeypatch):
-    monkeypatch.setattr("forge3d.netguard.requests.get",
-                        lambda url, **kw: _Resp(200, {"content-type": "text/html"},
+    _fake_stream(monkeypatch, _Resp(200, {"content-type": "text/html"},
                                                 body=b"<html>"))
     with pytest.raises(UnsafeURLError, match="not an accepted image type"):
         fetch_bytes("http://93.184.216.34/a.png")
 
 
 def test_bytes_that_are_not_an_image_are_refused(monkeypatch, tmp_path):
-    monkeypatch.setattr("forge3d.netguard.requests.get",
-                        lambda url, **kw: _Resp(200, {"content-type": "image/png"},
+    _fake_stream(monkeypatch, _Resp(200, {"content-type": "image/png"},
                                                 body=b"definitely not a png"))
     with pytest.raises(UnsafeURLError, match="not a decodable image"):
         fetch_image("http://93.184.216.34/a.png", tmp_path / "a.png")
@@ -193,8 +200,7 @@ def test_a_decompression_bomb_is_refused(monkeypatch, tmp_path):
 
     buf = io.BytesIO()
     Image.new("L", (4000, 4000)).save(buf, format="PNG")
-    monkeypatch.setattr("forge3d.netguard.requests.get",
-                        lambda url, **kw: _Resp(200, {"content-type": "image/png"},
+    _fake_stream(monkeypatch, _Resp(200, {"content-type": "image/png"},
                                                 body=buf.getvalue()))
     with pytest.raises(UnsafeURLError, match="pixel budget"):
         fetch_image("http://93.184.216.34/a.png", tmp_path / "a.png", max_pixels=1_000_000)
@@ -383,10 +389,9 @@ def test_provider_download_is_size_capped(monkeypatch, tmp_path):
             raise NotImplementedError
 
     monkeypatch.setenv("FORGE3D_MAX_DOWNLOAD_MB", "0")   # 0 MB -> any byte exceeds
-    monkeypatch.setattr("forge3d.providers.base.requests.request",
-                        lambda *a, **kw: _Resp(200, body=b"x" * 5000))
+    _fake_stream(monkeypatch, _Resp(200, body=b"x" * 5000))
     job = ProviderJob(provider="big", job_id="1", status=SUCCEEDED,
-                      asset_url="http://cdn/x.glb")
+                      asset_url="http://93.184.216.34/x.glb")
     with pytest.raises(ProviderError, match="exceeded"):
         Big().download(job, tmp_path, "x")
     assert not (tmp_path / "x.glb").exists(), "a rejected download must not be left behind"
