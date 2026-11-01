@@ -78,8 +78,19 @@ def resolve(preferred: str | None = None) -> GenerationProvider:
 
 
 def check_all(only: str | None = None) -> list[dict]:
-    """Live connectivity check for each provider that has credentials."""
-    targets = [get(only)] if only else list(_REGISTRY.values())
+    """Live connectivity check for each provider that has credentials.
+
+    An unknown name returns a reportable failure rather than raising: this is
+    called from the CLI, and `forge3d providers --check bogus` should print an
+    error, not a traceback.
+    """
+    if only:
+        try:
+            targets = [get(only)]
+        except KeyError as exc:
+            return [{"provider": only, "ok": False, "detail": str(exc).strip("'\"")}]
+    else:
+        targets = list(_REGISTRY.values())
     results = []
     for provider in targets:
         if not provider.available():
