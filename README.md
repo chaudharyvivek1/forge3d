@@ -178,6 +178,29 @@ is shrunk automatically to fit `poly_budget` *before* generating. Holes in a mas
 survive as real holes. Full detail, including what it will not do:
 [docs/image-to-3d.md](docs/image-to-3d.md).
 
+## Make anything from an equation
+
+15 shape families defined by maths, callable by name. No vertex loops, no noise
+code, no "almost watertight" caps:
+
+```python
+create_shape(shape="supershape", params={"m": 6, "n1": 0.3}, resolution=96)
+create_shape(shape="involute_gear", params={"teeth": 24}, export_format="stl")
+create_shape(shape="torus_knot", params={"p": 2, "q": 3})
+```
+
+`supershape` (Gielis superformula) covers flowers, stars and organic blobs.
+`involute_gear` is a real meshing tooth profile, not a decorative one.
+`lathe` turns any 2D silhouette into a solid of revolution. Plus
+`spherical_harmonic`, `superellipsoid`, `lissajous`, `spring`, `seashell`,
+`twisted_prism`, `bumpy_sphere`, and the open surfaces `mobius`, `helicoid`,
+`catenoid`. `list_shapes` returns every equation with its parameters.
+
+All 11 solids are watertight and pass the `print` profile — asserted per shape in
+the test suite, because "looks right" and "is printable" are different claims.
+Exports to GLB, STL, OBJ, PLY, OFF, glTF and DAE. Equations and parameter tables:
+[docs/surfaces.md](docs/surfaces.md).
+
 ## Procedural planets and scenes
 
 A website hero scene needs four rocky planets, not four bracket models. The
@@ -310,7 +333,7 @@ blocked CDN instead of showing a blank canvas.
 src/forge3d/
   spec.py          the brief as data — purpose, units, dimensions, budget
   backends/        procedural · image · openscad · blender · cadquery · hosted
-  geometry/        reusable generators: planets (terrain, craters, canyons, PBR bake)
+  geometry/        generators: planets (terrain, craters, PBR bake), surfaces (15 equation families)
   validate.py      profile-based checks, every failure carries a fix hint
   repair.py        merge, drop, fill, re-orient, decimate
   render.py        CPU previews (matplotlib) — works headless, no GPU
@@ -322,10 +345,10 @@ src/forge3d/
   context.py       model cards — the only sanctioned way to describe a mesh
   handoff.py       checklists + multi-agent handoff packets
   jobs.py          durable job records for slow generations
-  server.py        the MCP surface (18 tools)
+  server.py        the MCP surface (20 tools)
   cli.py           same capabilities without an agent
 skill/             agent skill: SKILL.md + references
-docs/              architecture, security, reliability, image-to-3d, geometry, platforms,
+docs/              architecture, security, reliability, image-to-3d, geometry, surfaces, platforms,
                    backends, threejs, multi-agent, licensing
 examples/          chair (trimesh), bracket (OpenSCAD), gear (bpy), plate (CadQuery)
 tests/             pytest — unit, platform and regression suites
