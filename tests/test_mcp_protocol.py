@@ -16,7 +16,8 @@ from forge3d.server import mcp
 EXPECTED_TOOLS = {
     "checklist", "convert_model", "create_handoff", "create_model", "doctor",
     "get_job", "inspect_model", "list_backends", "list_jobs", "make_viewer",
-    "create_planet", "create_shape", "list_shapes", "make_scene_viewer",
+    "create_planet", "create_shape", "list_providers", "list_shapes",
+    "make_scene_viewer",
     "model_card", "plan_model", "render_model", "repair_model", "review_model",
     "validate_model",
 }
