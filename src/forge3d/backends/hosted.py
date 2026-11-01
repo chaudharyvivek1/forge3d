@@ -24,6 +24,7 @@ See docs/backends.md for why this indirection exists and how to write the worker
 
 from __future__ import annotations
 
+import random
 import time
 from pathlib import Path
 
@@ -41,6 +42,31 @@ PROVIDER_PRESETS = {
     "hunyuan3d": {"art_style": None, "format": "glb"},
     "local": {"art_style": None, "format": "glb"},
 }
+
+
+def _request(method: str, url: str, attempts: int = 3, **kwargs) -> requests.Response:
+    """HTTP with bounded exponential backoff and jitter.
+
+    Text-to-3D providers rate-limit and have transient 5xx windows; a single
+    attempt turns a blip into a failed generation. Retries are capped and jittered
+    so a fleet of agents does not resynchronise into a thundering herd.
+    """
+    attempts = max(1, attempts)
+    delay = 1.0
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            resp = requests.request(method, url, **kwargs)
+            if resp.status_code >= 500:
+                raise requests.RequestException(f"server error {resp.status_code}")
+            return resp
+        except requests.RequestException as exc:
+            last = exc
+            if attempt == attempts - 1:
+                break
+            time.sleep(delay + random.uniform(0, delay * 0.4))
+            delay = min(delay * 2, 30.0)
+    raise last if last else requests.RequestException("request failed")
 
 
 class HostedBackend(Backend):
@@ -85,10 +111,13 @@ class HostedBackend(Backend):
             "provider": settings.hosted_provider,
         }
 
+        attempts = getattr(settings, "hosted_retries", 3)
         try:
-            resp = requests.post(f"{base}/generate", json=payload, headers=headers, timeout=60)
+            resp = _request("POST", f"{base}/generate", attempts=attempts,
+                            json=payload, headers=headers, timeout=60)
         except requests.RequestException as exc:
-            return BackendResult(ok=False, error=f"could not reach hosted backend: {exc}")
+            return BackendResult(ok=False, error=f"could not reach hosted backend: {exc}",
+                                 log=f"gave up after {attempts} attempt(s)")
 
         if resp.status_code >= 400:
             return BackendResult(ok=False, error=f"hosted backend returned {resp.status_code}", log=resp.text[-2000:])
@@ -103,9 +132,11 @@ class HostedBackend(Backend):
                 return BackendResult(ok=False, error=f"hosted job {job_id} exceeded {settings.job_timeout}s")
             time.sleep(max(2, int(kwargs.get("poll_interval", 5))))
             try:
-                poll = requests.get(f"{base}/jobs/{job_id}", headers=headers, timeout=60).json()
+                poll = _request("GET", f"{base}/jobs/{job_id}", attempts=attempts,
+                                headers=headers, timeout=60).json()
             except (requests.RequestException, ValueError) as exc:
-                return BackendResult(ok=False, error=f"polling failed: {exc}")
+                return BackendResult(ok=False, error=f"polling failed: {exc}",
+                                     log=f"gave up after {attempts} attempt(s)")
             status = poll.get("status")
             if status == "failed":
                 return BackendResult(ok=False, error=poll.get("error") or "hosted generation failed")
