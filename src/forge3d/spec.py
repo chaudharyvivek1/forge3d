@@ -9,15 +9,51 @@ the object that gets handed between agents.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import asdict, dataclass, field
 
 PURPOSES = ("print", "web", "game", "cad", "any")
 UNITS = ("mm", "cm", "m", "in")
 
+# Names that are illegal as file or directory names on Windows, whatever the
+# extension. A model called "con" or "aux" would fail to create its output
+# directory on Windows only — the kind of bug that ships because CI was Linux.
+_WIN_RESERVED = {
+    "con", "prn", "aux", "nul", "clock$",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
+
 
 def _slug(text: str, fallback: str = "model") -> str:
-    s = re.sub(r"[^a-zA-Z0-9]+", "-", (text or "").strip().lower()).strip("-")
-    return (s or fallback)[:60]
+    """A filesystem-safe identifier that keeps non-Latin scripts intact.
+
+    The previous version stripped everything outside `[a-zA-Z0-9]`, so a model
+    named "कुर्सी" or "椅子" silently became "model" — a name collision waiting to
+    happen for any user not naming things in English.
+
+    Unicode letters, digits **and combining marks** are preserved. Marks matter:
+    `re`'s `\\w` excludes them, which turned "कुर्सी" into "करस" — a mangled word
+    that looks like a typo in every Indian language that uses matras.
+    """
+    s = unicodedata.normalize("NFKC", (text or "").strip()).lower()
+    kept = []
+    for ch in s:
+        if ch in "-_ ":
+            kept.append(ch)
+            continue
+        # L* letters, M* marks (matras, vowel signs), N* digits — all valid in
+        # filenames on Windows, macOS and Linux.
+        if unicodedata.category(ch)[0] in ("L", "M", "N"):
+            kept.append(ch)
+    s = "".join(kept)
+    s = re.sub(r"[\s_]+", "-", s).strip("-.")
+    s = s[:60].strip("-.")
+    if not s:
+        return fallback
+    if s.split(".")[0] in _WIN_RESERVED:
+        s = f"{s}-model"
+    return s
 
 
 @dataclass
@@ -49,6 +85,7 @@ class ModelSpec:
 
     def __post_init__(self) -> None:
         self.name = _slug(self.name or self.prompt)
+        self.name = self.name or "model"
         self.purpose = (self.purpose or "any").lower()
         if self.purpose not in PURPOSES:
             self.purpose = "any"

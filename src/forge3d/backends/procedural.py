@@ -13,7 +13,6 @@ The agent's code must define a function `build()` returning a
 from __future__ import annotations
 
 import io
-import signal
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -23,6 +22,7 @@ import trimesh
 
 from .. import meshio
 from ..config import get_settings
+from ..platform_support import TimeoutExceeded, safe_timeout
 from ..spec import ModelSpec
 from .base import Backend, BackendResult
 
@@ -35,25 +35,24 @@ class _Timeout(Exception):
     pass
 
 
-def _alarm(signum, frame):
-    raise _Timeout()
-
-
 def _run_guarded(code: str, namespace: dict, timeout: int):
-    """Execute agent code with a wall-clock ceiling where the platform allows it."""
+    """Execute agent code with a wall-clock ceiling that works on every platform.
+
+    This previously used `signal.alarm`, which does not exist on Windows and
+    raises `ValueError: signal only works in main thread` elsewhere. MCP servers
+    run synchronous tools in a threadpool, so the timeout crashed in exactly the
+    environment this backend is meant for. `safe_timeout` is thread-based.
+
+    Capturing stdout matters more than it looks: agent code that prints would
+    otherwise write straight into the stdio JSON-RPC stream and corrupt it.
+    """
     buf_out, buf_err = io.StringIO(), io.StringIO()
-    can_alarm = hasattr(signal, "SIGALRM")
-    previous = None
-    if can_alarm:
-        previous = signal.signal(signal.SIGALRM, _alarm)
-        signal.alarm(max(1, int(timeout)))
-    try:
+
+    def _exec():
         with redirect_stdout(buf_out), redirect_stderr(buf_err):
-            exec(compile(code, "<forge3d-procedural>", "exec"), namespace)
-    finally:
-        if can_alarm:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, previous)
+            exec(compile(code, "<forge3d-procedural>", "exec"), namespace)  # noqa: S102
+
+    safe_timeout(_exec, max(1, int(timeout)), what="model code")
     return buf_out.getvalue(), buf_err.getvalue()
 
 
@@ -101,8 +100,13 @@ class ProceduralBackend(Backend):
 
         try:
             stdout, stderr = _run_guarded(source, namespace, settings.code_timeout)
-        except _Timeout:
-            return BackendResult(ok=False, error=f"model code exceeded {settings.code_timeout}s")
+        except TimeoutExceeded:
+            return BackendResult(
+                ok=False,
+                error=f"model code exceeded {settings.code_timeout}s",
+                log="Reduce the work inside build(), or raise FORGE3D_CODE_TIMEOUT. "
+                    "Note: the abandoned thread keeps running until it finishes.",
+            )
         except Exception:
             return BackendResult(ok=False, error="model code raised", log=traceback.format_exc()[-4000:])
 

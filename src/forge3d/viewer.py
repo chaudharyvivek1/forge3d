@@ -1,22 +1,38 @@
 """Turn a model into a single self-contained HTML page.
 
-The output is one file with the GLB embedded as a data URI. That matters: it
-means a designer can be sent a link, a stakeholder can open it offline, and
-nothing has to be hosted. For embedding in an existing app, use
+The output is one file with the GLB embedded as a data URI, so a designer can be
+sent a link and nothing has to be hosted. For embedding in an existing app, use
 `viewer_assets/forge3d-viewer.js` instead — a custom element that takes a URL.
+
+Two honesty notes that used to be wrong in the docs:
+
+* The *model* is embedded and needs no server. The *renderer* (three.js) is
+  loaded from a CDN by default, so the page needs network access unless you point
+  `FORGE3D_THREE_URL` at a local mirror of three. Air-gapped use is supported, but
+  it has to be configured — it is not the default.
+* `embed=False` writes the mesh beside the HTML and links it relatively. That
+  copy is now actually made; it previously produced a page pointing at a file
+  that was never written.
 """
 
 from __future__ import annotations
 
 import base64
+import html as html_lib
 import json
+import os
+import shutil
 from pathlib import Path
 
 from . import meshio
+from .platform_support import atomic_write
 from .spec import ModelSpec
 
 ASSETS = Path(__file__).parent / "viewer_assets"
 TEMPLATE = ASSETS / "template.html"
+
+DEFAULT_THREE_URL = "https://unpkg.com/three@0.169.0"
+
 MIME = {
     "glb": "model/gltf-binary",
     "gltf": "model/gltf+json",
@@ -24,6 +40,15 @@ MIME = {
     "obj": "model/obj",
     "ply": "model/ply",
 }
+
+
+def three_url() -> str:
+    """Where the page should load three.js from.
+
+    Set `FORGE3D_THREE_URL` to a local mirror (e.g. `http://localhost:8080/three`)
+    for air-gapped deployments, or to a different CDN if unpkg is blocked.
+    """
+    return (os.environ.get("FORGE3D_THREE_URL") or DEFAULT_THREE_URL).rstrip("/")
 
 
 def _as_glb(model_path: Path, workdir: Path) -> Path:
@@ -34,6 +59,18 @@ def _as_glb(model_path: Path, workdir: Path) -> Path:
     if glb.exists() and glb.stat().st_mtime >= model_path.stat().st_mtime:
         return glb
     return meshio.export(meshio.load(model_path), glb)
+
+
+def _json_for_script(payload: dict) -> str:
+    """JSON that is safe to inline inside a <script> element.
+
+    `json.dumps` alone lets a model name containing `</script>` terminate the
+    script block early — a real break, and an XSS vector if the name came from
+    user input. Escaping `<`, `>` and `&` as unicode escapes is valid JSON and
+    cannot close the tag.
+    """
+    text = json.dumps(payload)
+    return (text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
 
 
 def build_viewer(
@@ -68,15 +105,22 @@ def build_viewer(
         b64 = base64.b64encode(glb.read_bytes()).decode("ascii")
         uri = f"data:{MIME.get(glb.suffix.lstrip('.').lower(), 'application/octet-stream')};base64,{b64}"
     else:
+        # The page links the mesh relatively, so the mesh has to be next to it.
+        if glb.resolve() != (out_html.parent / glb.name).resolve():
+            target = out_html.parent / glb.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(glb, target)
         uri = glb.name
 
-    html = TEMPLATE.read_text(encoding="utf-8")
-    html = (
-        html.replace("__TITLE__", (title or payload_meta["name"] or "forge3d viewer"))
+    raw_title = title or payload_meta["name"] or "forge3d viewer"
+    page = TEMPLATE.read_text(encoding="utf-8")
+    page = (
+        page.replace("__TITLE__", html_lib.escape(raw_title))
         .replace("__MODEL_URI__", uri)
-        .replace("__META_JSON__", json.dumps(payload_meta))
+        .replace("__META_JSON__", _json_for_script(payload_meta))
+        .replace("__THREE_BASE__", three_url())
     )
-    out_html.write_text(html, encoding="utf-8")
+    atomic_write(out_html, page)
     return out_html
 
 

@@ -11,10 +11,9 @@ A minimal working script is in examples/blender_gear.py.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
+from ..platform_support import find_binary, install_hint, run
 from ..spec import ModelSpec
 from .base import Backend, BackendResult, missing_binary
 
@@ -52,11 +51,14 @@ class BlenderBackend(Backend):
     }
 
     def available(self) -> bool:
-        return shutil.which("blender") is not None
+        return find_binary("blender", env_var="FORGE3D_BLENDER") is not None
 
     def generate(self, spec: ModelSpec, out_dir: Path, source: str | None = None, **kwargs) -> BackendResult:
-        if not self.available():
-            return missing_binary("blender")
+        binary = find_binary("blender", env_var="FORGE3D_BLENDER")
+        if not binary:
+            result = missing_binary("blender")
+            result.log = install_hint("blender")
+            return result
         if not source or not source.strip():
             return BackendResult(
                 ok=False,
@@ -75,16 +77,15 @@ class BlenderBackend(Backend):
         script_path.write_text(WRAPPER.format(body=body), encoding="utf-8")
 
         cmd = [
-            "blender", "-b", "--factory-startup",
+            binary, "-b", "--factory-startup",
             "-P", str(script_path),
             "--", str(glb_path),
         ]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=kwargs.get("timeout", 600))
-        except subprocess.TimeoutExpired:
-            return BackendResult(ok=False, error="blender timed out")
+        proc = run(cmd, timeout=int(kwargs.get("timeout", 600)))
+        if proc.timed_out:
+            return BackendResult(ok=False, error="blender timed out", log=proc.output[-2000:])
 
-        log = (proc.stdout or "") + (proc.stderr or "")
+        log = proc.output
         if not glb_path.exists():
             return BackendResult(ok=False, error="blender produced no export", log=log[-6000:])
 
@@ -93,5 +94,5 @@ class BlenderBackend(Backend):
             path=str(glb_path),
             log=log[-4000:],
             extra_outputs={"bpy": str(script_path)},
-            meta={"engine": "blender"},
+            meta={"engine": "blender", "binary": binary},
         )

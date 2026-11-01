@@ -1,4 +1,4 @@
-"""The MCP surface — one server, thirteen tools, any agent.
+"""The MCP surface — one server, sixteen tools, any agent.
 
 Design rules this file follows, because they are what make an MCP server usable
 by a *generic* agent rather than only by its author:
@@ -23,7 +23,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from . import backends, context, meshio, render, repair, validate, viewer
+from . import backends, context, meshio, platform_support, render, repair, validate, viewer
 from . import handoff as handoff_mod
 from .config import get_settings
 from .jobs import JobStore
@@ -100,6 +100,19 @@ def list_backends() -> dict:
 
 
 @mcp.tool
+def doctor() -> dict:
+    """Diagnose this runtime: OS, Python, which engines exist, what is missing and how to fix it.
+
+    Call this when a backend reports itself unavailable, or before telling a user
+    that something cannot be done. It returns copy-pasteable install commands
+    for the current OS rather than a generic error.
+    """
+    settings = get_settings()
+    report = platform_support.doctor(settings.ensure_workdir())
+    return {"ok": True, "report": report, "hints": report["hints"]}
+
+
+@mcp.tool
 def plan_model(
     prompt: str = "",
     name: str = "model",
@@ -160,6 +173,8 @@ def create_model(
     poly_budget: int | None = None,
     constraints: list[str] | None = None,
     references: list[str] | None = None,
+    materials: list[str] | None = None,
+    seed: int | None = None,
     scale_to_spec: bool = False,
     render_previews: bool = True,
     make_viewer: bool = True,
@@ -180,6 +195,7 @@ def create_model(
     spec = _spec(
         prompt=prompt, name=name, purpose=purpose, units=units, dimensions=dimensions,
         style=style, poly_budget=poly_budget, constraints=constraints, references=references,
+        materials=materials, seed=seed,
     )
     store = _store()
     job = store.create(backend, spec.to_dict())

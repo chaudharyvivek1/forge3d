@@ -1,0 +1,13 @@
+.git
+.gitignore
+.github
+.forge3d
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.egg-info
+dist
+build
+docs/demo/*.glb
+*.pyc
+.env

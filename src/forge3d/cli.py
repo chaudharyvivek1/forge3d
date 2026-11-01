@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import backends, context, meshio, render, repair, validate, viewer
+from . import backends, context, meshio, platform_support, render, repair, validate, viewer
 from .config import get_settings
 from .spec import ModelSpec
 
@@ -45,6 +45,18 @@ def _print(data) -> None:
 def cmd_backends(_args) -> int:
     _print({"backends": backends.list_backends()})
     return 0
+
+
+def cmd_doctor(args) -> int:
+    workdir = Path(args.workdir) if args.workdir else get_settings().ensure_workdir()
+    report = platform_support.doctor(workdir)
+    _print(report)
+    if not args.quiet:
+        print()
+        for hint in report["hints"]:
+            print(f"  ! {hint}")
+        print(f"\n  ready: {'yes' if report['ready'] else 'no'}")
+    return 0 if report["ready"] else 2
 
 
 def cmd_plan(args) -> int:
@@ -80,7 +92,7 @@ def cmd_create(args) -> int:
         style=args.style or "",
         poly_budget=args.budget,
     )
-    source = Path(args.source).read_text(encoding="utf-8") if args.source else None
+    source = Path(args.source).read_text(encoding="utf-8", errors="replace") if args.source else None
     out_dir = get_settings().ensure_workdir() / "models" / spec.name
     used, result = backends.run(args.backend, spec, out_dir, source=source)
 
@@ -167,6 +179,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("backends", help="list geometry engines").set_defaults(func=cmd_backends)
+
+    doc = sub.add_parser("doctor", help="diagnose this machine: engines, packages, workdir")
+    doc.add_argument("--workdir", default=None)
+    doc.add_argument("--quiet", action="store_true", help="JSON only, no hints")
+    doc.set_defaults(func=cmd_doctor)
 
     def add_spec_args(sp):
         sp.add_argument("--prompt", default="", help="what the model is")

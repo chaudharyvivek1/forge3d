@@ -15,5 +15,5 @@ The package is deliberately split so that each layer is usable on its own:
 
 from .spec import ModelSpec
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["ModelSpec", "__version__"]

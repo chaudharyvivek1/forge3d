@@ -1,0 +1,25 @@
+# Normalise line endings across platforms. Without this, a Windows clone
+# rewrites every file with CRLF and every subsequent diff is noise.
+* text=auto eol=lf
+
+# Explicit LF for files where a stray CR breaks something.
+*.py    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.scad  text eol=lf
+*.sh    text eol=lf
+
+# Windows-only scripts, if added later, keep CRLF.
+*.ps1   text eol=crlf
+
+# Binary — never diff, never convert.
+*.glb   binary
+*.gltf  text eol=lf
+*.png   binary
+*.jpg   binary
+*.zip   binary
+*.stl   binary
+*.3mf   binary
+*.step  text eol=lf

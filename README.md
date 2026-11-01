@@ -50,23 +50,37 @@ Optional engines — install only what you need:
 
 ```bash
 # exact CSG parts (brackets, enclosures)
-sudo apt install openscad          # or download from openscad.org
+sudo apt install openscad        # macOS: brew install --cask openscad
+                                 # Windows: winget install OpenSCAD.OpenSCAD
 
 # organic forms, bevels, materials, animation
-sudo apt install blender
+sudo snap install blender --classic   # macOS: brew install --cask blender
+                                      # Windows: winget install BlenderFoundation.Blender
 
 # real B-rep CAD with STEP export
 pip install cadquery
 
 # decimation in repair_model
 pip install fast-simplification
+
+# boolean unions in trimesh (procedural backend)
+pip install manifold3d
 ```
 
 Check what this machine can actually do — never guess:
 
 ```bash
-forge3d backends
+forge3d doctor      # OS, Python, engines, packages, workdir, and how to fix gaps
+forge3d backends    # just the engine list
 ```
+
+`doctor` is also an MCP tool, so an agent can diagnose its own runtime instead of
+guessing why a backend is unavailable. It reports whether an env var is set,
+never its value — an API key is not echoed back.
+
+Works on **Linux, macOS and Windows**, in Docker, and in CPU-only agent
+sandboxes. The full matrix, including what does *not* work where, is in
+[docs/platforms.md](docs/platforms.md).
 
 ## Quick start (agent)
 
@@ -138,10 +152,13 @@ testable and easy to change.
 Two ways, both in the repo:
 
 **Single-file page** — `make_viewer` embeds the GLB as a data URI, so the HTML
-works offline with no server, no CORS, no hosting:
+needs no server, no CORS and no hosting. The *model* is embedded; three.js still
+loads from a CDN by default, so for an air-gapped machine point
+`FORGE3D_THREE_URL` at a local mirror of three before building the page:
 
 ```bash
 forge3d viewer output/chair.glb --out chair.html
+FORGE3D_THREE_URL=http://localhost:8080/three forge3d viewer output/chair.glb --out chair.html
 ```
 
 **Embeddable element** — for your own app, a custom element that takes a URL:
@@ -189,6 +206,30 @@ create_handoff(
 )
 ```
 
+## What was fixed in v0.2.0
+
+The audit that produced 0.2.0 found seven real bugs, each now covered by a test
+in `tests/test_regressions.py`:
+
+1. **The default backend crashed inside a worker thread.** The code timeout used
+   `signal.alarm`, which is unavailable on Windows and raises `ValueError:
+   signal only works in main thread` elsewhere — and MCP servers run sync tools
+   in a threadpool. Timeouts are now thread-based.
+2. **`.gltf` export was impossible.** trimesh returns a dict of filename→payload
+   for multi-file formats; that dict went straight to `write_bytes`.
+3. **A model name could break out of the viewer page.** `</script>` in a title
+   terminated the script block — a real XSS vector on user-supplied names.
+4. **`embed=False` produced a page pointing at a file it never wrote.**
+5. **Non-Latin model names collapsed to `model`.** Hindi and CJK names are now
+   preserved, matras included.
+6. **Windows-illegal filenames were not avoided** (`con`, `aux`, `COM1`…).
+7. **Subprocess output was decoded with the platform default**, so a non-ASCII
+   error message raised `UnicodeDecodeError` on Windows.
+
+Plus: `materials` and `seed` are now reachable from `create_model`, the OpenSCAD
+source detector no longer needs the `module` keyword, and the viewer explains a
+blocked CDN instead of showing a blank canvas.
+
 ## Repository layout
 
 ```
@@ -200,15 +241,17 @@ src/forge3d/
   render.py        CPU previews (matplotlib) — works headless, no GPU
   viewer.py        single-file Three.js page
   viewer_assets/   template.html + forge3d-viewer.js custom element
+  platform_support.py  binary discovery, UTF-8 subprocess, thread-safe timeouts, doctor
   context.py       model cards — the only sanctioned way to describe a mesh
   handoff.py       checklists + multi-agent handoff packets
   jobs.py          durable job records for slow generations
-  server.py        the MCP surface (13 tools)
+  server.py        the MCP surface (16 tools)
   cli.py           same capabilities without an agent
 skill/             agent skill: SKILL.md + references
-docs/              architecture, backends, threejs, multi-agent, licensing
-examples/          chair (trimesh), bracket (OpenSCAD), gear (bpy)
-tests/             pytest
+docs/              architecture, platforms, backends, threejs, multi-agent, licensing
+examples/          chair (trimesh), bracket (OpenSCAD), gear (bpy), plate (CadQuery)
+tests/             pytest — unit, platform and regression suites
+Dockerfile         CPU-only image, non-root, /work volume
 ```
 
 ## Honest limitations

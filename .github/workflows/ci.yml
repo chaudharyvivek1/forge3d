@@ -4,21 +4,32 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # The core promise: the same code works on Linux, macOS and Windows, on the
+  # oldest and newest supported Pythons. v0.1.0 shipped a `signal.alarm`
+  # timeout that could only ever pass on a Linux main thread; this matrix is
+  # what stops that class of bug from shipping again.
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
-
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.python }}
+          cache: pip
 
       - name: Install
         run: |
@@ -33,10 +44,59 @@ jobs:
           FORGE3D_ALLOW_CODE_EXEC: "true"
         run: pytest -q
 
-      # The engines that need external binaries are skipped by the test suite
-      # when absent — this job proves the suite is honest on a bare machine,
-      # and the job below proves it still passes with OpenSCAD present.
-  test-with-openscad:
+      - name: CLI smoke test (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          forge3d doctor --quiet > /dev/null
+          forge3d create --name smoke --purpose game --backend procedural \
+            --source examples/procedural_chair.py --dims x=450,y=480,z=850 --viewer
+
+      - name: CLI smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          forge3d doctor --quiet | Out-Null
+          forge3d create --name smoke --purpose game --backend procedural `
+            --source examples/procedural_chair.py --dims x=450,y=480,z=850 --viewer
+
+  # Proves the optional engines work when the binary is actually present, so
+  # the skip-marked tests are known to be real rather than permanently skipped.
+  engines:
+    name: engines / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            install: sudo apt-get update && sudo apt-get install -y openscad
+          - os: macos-latest
+            install: brew install --cask openscad || true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install OpenSCAD
+        run: ${{ matrix.install }}
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[render,dev]"
+
+      - name: Doctor
+        run: forge3d doctor || true
+
+      - name: Engine tests
+        run: pytest -q -k "openscad or scad or auto or routing"
+
+  # A wheel that cannot be built or cannot find its viewer assets is broken for
+  # every user installing from PyPI, and no unit test would catch it.
+  package:
+    name: build and install the wheel
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,13 +104,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install OpenSCAD
-        run: sudo apt-get update && sudo apt-get install -y openscad
-
-      - name: Install package
+      - name: Build
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[render,dev]"
+          python -m pip install --upgrade pip build
+          python -m build
 
-      - name: Test with OpenSCAD available
-        run: pytest -q -k "openscad or auto"
+      - name: Install the wheel in a clean venv and check assets
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          /tmp/venv/bin/python -c "
+          import importlib.resources as r, forge3d
+          tpl = r.files('forge3d') / 'viewer_assets' / 'template.html'
+          js  = r.files('forge3d') / 'viewer_assets' / 'forge3d-viewer.js'
+          assert tpl.is_file(), 'template.html missing from the wheel'
+          assert js.is_file(), 'forge3d-viewer.js missing from the wheel'
+          print('assets ok, forge3d', forge3d.__version__)
+          "
+          /tmp/venv/bin/forge3d doctor --quiet | head -20

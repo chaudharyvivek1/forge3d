@@ -38,17 +38,33 @@ def list_backends() -> list[dict]:
     return [b.describe() for b in ALL.values()]
 
 
+# Tokens that only appear in OpenSCAD source. Requiring two of them avoids
+# mis-routing Python that merely calls something named `cube`.
+_SCAD_TOKENS = (
+    "module ", "difference(", "union(", "intersection(", "translate(",
+    "rotate(", "linear_extrude", "rotate_extrude", "hull(", "minkowski(",
+    "$fn", "cylinder(", "cube(", "sphere(", "polyhedron(",
+)
+
+
+def _looks_like_scad(src: str) -> bool:
+    head = src[:2000].lower()
+    if ("def " in head or "import " in head) and "module " not in head:
+        return False
+    return sum(token in head for token in _SCAD_TOKENS) >= 2
+
+
 def resolve_auto(spec: ModelSpec, source: str | None = None, purpose_hint: str | None = None) -> str:
     """Pick a backend from the brief. Explicit signals beat heuristics."""
     purpose = (purpose_hint or spec.purpose or "any").lower()
 
     if source:
-        head = source[:400].lower()
+        head = source[:2000].lower()
         if "bpy" in head or "bmesh" in head:
             return "blender"
         if "cadquery" in head or "cq." in head:
             return "cadquery"
-        if "module" in head and ("cube(" in head or "cylinder(" in head or "difference()" in head):
+        if _looks_like_scad(source):
             return "openscad"
 
     if purpose == "cad" and ALL["cadquery"].available():

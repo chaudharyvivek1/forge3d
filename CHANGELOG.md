@@ -4,6 +4,77 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.2.0] — 2026-11-01
+
+Cross-platform hardening and a bug audit of every module. Seven real defects
+fixed, each with a regression test in `tests/test_regressions.py`.
+
+### Fixed
+
+- **Procedural backend failed in a worker thread.** The code timeout used
+  `signal.alarm`, which does not exist on Windows and raises `ValueError: signal
+  only works in main thread` elsewhere — and MCP servers execute synchronous
+  tools in a threadpool, so the default backend was broken in the environment it
+  was built for. Timeouts are now thread-based (`platform_support.safe_timeout`).
+- **`.gltf` export was impossible.** trimesh returns a dict of
+  `filename -> payload` for multi-file formats, and that dict was passed to
+  `write_bytes`, raising `TypeError: memoryview: a bytes-like object is required`.
+  Sidecar buffers are now written next to the main file.
+- **HTML/script injection through a model name.** A title containing `</script>`
+  terminated the viewer's script block early — a genuine XSS vector when the name
+  comes from user input. Titles are HTML-escaped and the inline JSON is
+  unicode-escaped.
+- **`embed=False` produced a broken page.** The generated HTML linked a relative
+  mesh path that was never written. The mesh is now copied beside the page.
+- **Non-Latin model names collapsed to `model`.** `[^a-zA-Z0-9]` stripping turned
+  "कुर्सी" and "椅子" into "model", inviting silent collisions. Unicode letters,
+  digits and combining marks (matras) are preserved.
+- **Windows-illegal filenames were not avoided.** `con`, `prn`, `aux`, `nul`,
+  `com1`–`com9`, `lpt1`–`lpt9` cannot be file or directory names on Windows;
+  they are now suffixed.
+- **Subprocess output was decoded with the platform default encoding.**
+  `text=True` without `encoding=` uses cp1252 on Windows, so any non-ASCII
+  character in a tool's error message raised `UnicodeDecodeError`.
+- **`.dae` export raised a raw `ImportError`** instead of naming the missing
+  optional dependency and the alternatives.
+- **`materials` and `seed` were unreachable** from `create_model`, though both
+  existed on `ModelSpec`.
+- **OpenSCAD source detection required the `module` keyword**, so a plain
+  `difference() { ... }` file was routed to the wrong backend.
+- **`body_count` crashed without scipy**, taking the whole inspection with it.
+
+### Added
+
+- `platform_support` module: per-OS binary discovery (including app bundles on
+  macOS and versioned installs on Windows), UTF-8 subprocess wrapper with a hard
+  timeout, `CREATE_NO_WINDOW` on Windows, atomic file writes, and thread-safe
+  timeouts.
+- **`doctor`** — new CLI command and MCP tool. Reports OS, Python, CPU, every
+  engine's availability with its resolved path, optional packages, workdir
+  writability, and copy-pasteable install commands for the current OS. Reports
+  whether an env var is set, never its value.
+- `FORGE3D_OPENSCAD`, `FORGE3D_BLENDER` and `FORGE3D_THREE_URL` environment
+  overrides.
+- Viewer pages now explain a blocked three.js CDN instead of showing a blank
+  canvas, and can be pointed at a local three.js mirror for air-gapped use.
+- `Dockerfile` (non-root, healthcheck, `/work` volume) and `.dockerignore`.
+- `.gitattributes` normalising line endings across platforms.
+- CI matrix: Linux, macOS and Windows × Python 3.10 and 3.12, an engine job that
+  installs OpenSCAD, and a wheel job that verifies the viewer assets ship inside
+  the package.
+- `docs/platforms.md` — the support matrix, including what does *not* work on
+  each platform and why.
+- `tests/test_platform.py` and `tests/test_regressions.py` (68 new tests).
+
+### Changed
+
+- Viewer docs corrected: the *model* is embedded and needs no server, but
+  three.js still loads from a CDN by default. Air-gapped operation is supported
+  and now documented as configuration rather than a default.
+- `safe_timeout` documents its real limitation: Python cannot kill a thread, so
+  a timed-out build is abandoned, not stopped. Containment needs a process
+  boundary.
+
 ## [0.1.0] — 2026-11-01
 
 First public release.

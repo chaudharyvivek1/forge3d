@@ -9,6 +9,15 @@ You are working with a 3D modelling toolchain exposed over MCP. The tools do the
 geometry; **you** are responsible for the brief, the review loop, and telling the
 truth about what came out.
 
+## If a backend is missing — `doctor`
+
+Never guess why an engine is unavailable, and never tell a user "that isn't
+supported" before checking. Call `doctor`. It returns the OS, the resolved path
+of each binary, missing optional packages, and copy-pasteable install commands
+for the current platform (apt / brew / winget). On Windows and macOS an installer
+usually does not add itself to PATH — `doctor` is how you find out, and
+`FORGE3D_OPENSCAD` / `FORGE3D_BLENDER` are how you fix it.
+
 ## The one rule that matters
 
 **Never paste geometry into context.** No vertex lists, no base64, no file dumps.
@@ -80,6 +89,7 @@ When another agent, or a human, picks this up next, write the packet. Include
 ## Checklist before you say "done"
 
 - [ ] purpose and real dimensions were confirmed with the user, not assumed
+- [ ] if a backend was unavailable, `doctor` was run and the install hint relayed
 - [ ] validation passes for the target profile (or you have told the user exactly
       which warnings remain and why they are acceptable)
 - [ ] you have looked at at least one preview render

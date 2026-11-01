@@ -63,14 +63,50 @@ def _flatten(scene: trimesh.Scene) -> trimesh.Trimesh:
 
 
 def export(obj: trimesh.Trimesh | trimesh.Scene, out_path: str | Path, fmt: str | None = None) -> Path:
+    """Write geometry to disk, handling single-file and multi-file formats.
+
+    trimesh returns three different shapes depending on the format: `bytes` for
+    binary (glb, stl, ply), `str` for text (obj, off), and a **dict of
+    filename -> payload** for formats that need sidecar files (.gltf emits a
+    .gltf plus .bin buffers). The dict case used to raise
+    `TypeError: memoryview: a bytes-like object is required, not 'dict'`, which
+    made `convert_model(fmt='gltf')` impossible. Sidecars are now written next
+    to the main file, which is what a glTF consumer expects.
+    """
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     suffix = f".{(fmt or p.suffix).lstrip('.').lower()}"
     if suffix not in WRITABLE:
-        raise MeshError(f"cannot write {suffix!r}; supported: {sorted(WRITABLE)}")
+        raise MeshError(
+            f"cannot write {suffix!r}; supported: {sorted(WRITABLE)}"
+            + (" — .step needs the cadquery backend" if suffix in {".step", ".stp"} else "")
+        )
     if p.suffix.lower() != suffix:
         p = p.with_suffix(suffix)
-    data = obj.export(file_type=suffix.lstrip("."))
+
+    try:
+        data = obj.export(file_type=suffix.lstrip("."))
+    except ImportError as exc:
+        # e.g. .dae needs pycollada; .gltf needs nothing extra but is noisy about it
+        raise MeshError(
+            f"{suffix} export needs an optional dependency: {exc}. "
+            f"Install it, or convert to glb/stl/obj instead."
+        ) from exc
+
+    if isinstance(data, dict):
+        # Multi-file format: the entry matching our suffix is the main file.
+        main_key = next((k for k in data if k.lower().endswith(suffix)), None)
+        for name, payload in data.items():
+            target = p if name == main_key else p.parent / Path(name).name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(payload, str):
+                target.write_text(payload, encoding="utf-8")
+            else:
+                target.write_bytes(payload)
+        if main_key is None:
+            raise MeshError(f"exporter returned {list(data)} with no {suffix} entry")
+        return p
+
     if isinstance(data, str):
         p.write_text(data, encoding="utf-8")
     else:

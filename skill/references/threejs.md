@@ -4,9 +4,20 @@
 
 ### 1. Single-file page (`make_viewer`)
 
-The GLB is embedded as a base64 data URI. One file, works offline, no server, no
-CORS. Best for: sending a model to a designer or client, attaching to a ticket,
-opening from a filesystem path.
+The GLB is embedded as a base64 data URI. One file, no server, no CORS, no
+hosting. Best for: sending a model to a designer or client, attaching to a
+ticket, opening from a filesystem path.
+
+**One caveat worth stating plainly:** the *model* is embedded, but three.js is
+loaded from a CDN by default, so the page needs network access on first open.
+For an air-gapped machine, build the page against a local mirror:
+
+```bash
+FORGE3D_THREE_URL=http://localhost:8080/three forge3d viewer model.glb --out model.html
+```
+
+If the CDN is blocked and no mirror is configured, the page now says so on
+screen instead of showing a blank canvas.
 
 ```bash
 forge3d viewer output/chair.glb --out chair.html

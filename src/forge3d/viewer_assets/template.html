@@ -57,11 +57,25 @@
 <div id="drop">drop a .glb / .gltf file to inspect it</div>
 <div id="loading">building scene</div>
 
+<script>
+  // If three.js cannot be fetched (air-gapped machine, blocked CDN), say so
+  // plainly instead of leaving a blank canvas with an error only in devtools.
+  window.addEventListener('error', function (e) {
+    var el = document.getElementById('loading');
+    if (!el || el.classList.contains('hide')) return;
+    var src = (e.target && (e.target.src || e.target.href)) || 'the three.js CDN';
+    el.innerHTML = 'Could not load the 3D engine from<br><code>' + src +
+      '</code><br><br>This page needs network access for three.js.<br>' +
+      'Set <code>FORGE3D_THREE_URL</code> to a local mirror and rebuild the page to work offline.';
+    el.style.cssText += 'text-transform:none;letter-spacing:0;line-height:1.7;text-align:center;padding:24px;font-size:13px';
+  }, true);
+</script>
+
 <script type="importmap">
 {
   "imports": {
-    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+    "three": "__THREE_BASE__/build/three.module.js",
+    "three/addons/": "__THREE_BASE__/examples/jsm/"
   }
 }
 </script>
@@ -280,6 +294,9 @@ addEventListener('drop', (e) => {
   const url = URL.createObjectURL(file);
   loadFromUri(url, { name: file.name, source: 'dropped file' });
 });
+
+// drop the overlay once the pointer leaves the window entirely
+addEventListener('dragend', () => document.getElementById('drop').classList.remove('show'));
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
