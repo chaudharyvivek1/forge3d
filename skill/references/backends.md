@@ -45,6 +45,28 @@ booleans, you are on the wrong backend.
 Booleans need `pip install manifold3d`. Without it, `trimesh.boolean` raises —
 so concatenate, or install it.
 
+## image — geometry derived from pixels
+
+Two modes, both deterministic and watertight:
+
+```python
+# relief: brightness becomes height (lithophane, plaque, height map)
+create_model(backend="image", source="portrait.jpg", purpose="print",
+             dimensions={"x": 100, "y": 75, "z": 8})
+
+# silhouette: alpha becomes an extruded profile, holes preserved (logo, gasket)
+create_model(backend="image", source="logo.png", purpose="print",
+             dimensions={"x": 80, "y": 80, "z": 4}, thickness=4.0)
+```
+
+**Win:** needs nothing but PIL; exact arithmetic; the only local route from an
+image to a printable solid.
+**Lose:** it derives, it does not reconstruct — no hidden geometry, no textures,
+no organic characters. For those, route to `hosted`.
+
+Budget note: relief cost is `4(g-1)^2 + 8(g-1)` triangles at grid `g`. Pass
+`poly_budget` in the spec and the grid is reduced to fit *before* generating.
+
 ## openscad — declarative CSG
 
 Pass the `.scad` body; `$fn` is added for you unless present.
