@@ -64,7 +64,7 @@ class GenericWorkerProvider(GenerationProvider):
             "provider": os.environ.get("FORGE3D_HOSTED_PROVIDER", "generic"),
         }
         resp = request_with_retries(
-            "POST", f"{base.rstrip('/')}/generate", attempts=3,
+            "POST", f"{base.rstrip('/')}/generate",
             json=payload, headers=self._headers(), timeout=60,
         )
         self._raise_for_status(resp, "submit")
@@ -83,7 +83,7 @@ class GenericWorkerProvider(GenerationProvider):
         if not base:
             raise ProviderError("generic provider needs FORGE3D_HOSTED_URL")
         resp = request_with_retries(
-            "GET", f"{base.rstrip('/')}/jobs/{job_id}", attempts=3,
+            "GET", f"{base.rstrip('/')}/jobs/{job_id}",
             headers=self._headers(), timeout=60,
         )
         self._raise_for_status(resp, "status")
