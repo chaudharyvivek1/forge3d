@@ -4,6 +4,88 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.6.2] — 2026-11-01
+
+Security and core reliability, from an external review. Five P1 findings fixed,
+plus four P2 items. This is the release the review asked for as "v0.6.2 — Security
+and core reliability".
+
+### Fixed — remote execution (P1)
+
+- **The execution policy is now central.** `Backend.executes_user_code` marks the
+  three code-running backends (`procedural`, `cadquery`, `blender`) and the
+  registry refuses any of them when `FORGE3D_ALLOW_CODE_EXEC=false`. Before this,
+  only the procedural backend checked — CadQuery executed in-process with no gate
+  and no timeout, and Blender ran unsandboxed.
+- **CadQuery honours `FORGE3D_EXEC_MODE`.** In `subprocess` mode it runs in a
+  killable child with rlimits and `FORGE3D_SANDBOX` wrapping, exporting STEP and
+  STL from the child.
+- **Blender is wrapped in the same sandbox** as the procedural child, and reports
+  which isolation ran.
+
+### Fixed — SSRF and resource exhaustion (P1)
+
+- New **`netguard`** module. Remote image URLs are refused unless: scheme is
+  http/https; every resolved IP is public (loopback, private, link-local, reserved
+  and multicast refused); **every redirect hop is revalidated**; the body streams
+  under a byte ceiling; the declared type is an image; the bytes decode; and the
+  pixel count is inside a budget.
+- The image backend surfaces the refusal with the reason, and suggests a local
+  path instead of silently reporting "no image".
+
+### Fixed — duplicate paid generations (P1)
+
+- Job-creation POSTs now carry an **`Idempotency-Key`**, are **not retried** after
+  an ambiguous timeout or a 5xx, and raise `AmbiguousSubmission` carrying that key.
+- The backend reports this as `status: uncertain` — never `failed`, because
+  "failed" invites a retry that costs money.
+
+### Fixed — provider selection and cancellation (P1)
+
+- **`HostedBackend.available()`** now resolves the *selected* provider. A missing
+  Meshy key with Tripo configured used to report "available" and then fail.
+  `describe()` exposes `selected_provider` / `selected_available` / `selected_reason`.
+- **A timed-out provider job is cancelled.** Previously forge3d returned "failed"
+  while the remote job kept running and billing.
+
+### Fixed — P2
+
+- **Job heartbeat.** A long generation wrote nothing for minutes, so the next
+  request's `recover_stale()` could kill a healthy job. `JobStore.heartbeat()`
+  refreshes the record while the backend runs.
+- **The job lock is process-wide.** It was per instance, and every tool call
+  builds a new store — so it serialised nothing, despite the comment.
+- **Provider downloads are size-capped** (`FORGE3D_MAX_DOWNLOAD_MB`, default 512)
+  and a rejected download is removed rather than left half-written.
+- **`allowed_hosts` no longer defaults to `["*"]`** on a public bind, which
+  defeated the DNS-rebinding check it existed to provide. Set
+  `FORGE3D_HTTP_ALLOWED_HOSTS` instead.
+
+### Fixed — documentation
+
+- `docs/security.md` claimed rate limiting was "not implemented"; it has been
+  implemented since 0.3.0. It now also documents the central execution policy, the
+  URL guard, idempotent submission, and that **bubblewrap's read-only root is an
+  integrity control, not a confidentiality boundary**.
+- `docs/architecture.md` said "5 interchangeable engines" (six).
+- `docs/providers.md` documents idempotency and what `available()` means.
+
+### Not done, deliberately
+
+- **Asynchronous job API** (`submit_generation` / `get_job_result` / `cancel_job`
+  with a worker) is v0.7.0. `create_model` still blocks. Splitting it is a
+  restructure of the tool surface, not a patch.
+- **Workflow engine** is v0.8.0 and belongs in the platform repo.
+- **Live verification of the commercial adapters** needs real keys; `verified`
+  stays `False` until someone runs `forge3d providers --check` for real.
+
+### Tests
+
+377 passing (was 345). New `tests/test_security_v2.py` (33) covers the execution
+policy per backend, six SSRF refusals, redirect revalidation, both size caps, the
+decompression-bomb guard, idempotency, selected-provider availability,
+cancel-on-timeout, the heartbeat, the shared lock, and the download cap.
+
 ## [0.6.1] — 2026-11-01
 
 Documentation and code audit. Five stale claims in the docs and four real code
