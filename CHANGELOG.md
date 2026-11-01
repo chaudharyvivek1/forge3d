@@ -4,6 +4,48 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.6.0] — 2026-11-01
+
+Provider adapters: real integrations for Meshy, Tripo and Rodin behind one
+interface, without breaking the generic worker.
+
+### Added
+
+- **`forge3d.providers`** — a job-shaped provider contract
+  (`submit` / `get_status` / `download` / `cancel` / `check` / `estimate`) with
+  five normalised statuses. Unknown status words map to `running`, not `failed`:
+  an unrecognised string is not evidence of failure.
+- **Adapters**: `meshy`, `tripo`, `rodin`, plus `generic` (the original worker
+  contract, unchanged). Each declares `verified` — only `generic` is `True`.
+- **`list_providers`** MCP tool (21 tools) and **`forge3d providers [--check]`** —
+  what is configured, what is verified, and a live authenticated probe on demand.
+- `FORGE3D_PROVIDER` selects a provider; `FORGE3D_MESHY_KEY` / `_TRIPO_KEY` /
+  `_RODIN_KEY` hold credentials; each adapter's base URL is overridable for
+  regional endpoints and tests.
+- `HostedBackend.estimate()` — credits and ETA from the selected provider before
+  anything is spent.
+- `docs/providers.md` — the interface, how to add one, and what is missing.
+
+### Fixed
+
+- **A synchronous worker response crashed.** `GenericWorkerProvider.submit()`
+  referenced `SUCCEEDED` without importing it, so any worker that answered with an
+  `asset_url` immediately — instead of a `job_id` — raised `NameError`. Lint found
+  it; a test now covers that branch.
+
+### Notes
+
+The commercial adapters are written from public API documentation and are **not
+verified against live accounts**. Their mapping logic is tested against the
+response shapes those docs describe, and `check()` settles the rest with a real
+request. `list_providers` reports the distinction rather than hiding it.
+
+### Tests
+
+342 passing (was 310). New `tests/test_providers.py` (32) covers request mapping
+per adapter, status normalisation, application-level error codes, registry
+selection, and the hosted backend driven end-to-end by a fake provider.
+
 ## [0.5.1] — 2026-11-01
 
 Fixes an external review's P0 finding: the local/cloud guarantee was documented
