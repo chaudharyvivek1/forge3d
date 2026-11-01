@@ -4,6 +4,57 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.6.6] — 2026-11-01
+
+Output-path confinement. Three bugs found by running the tools, all reachable from
+the MCP surface and therefore from an untrusted HTTP caller.
+
+### Fixed — tools could write anywhere on disk
+
+`make_viewer`, `make_scene_viewer`, `create_handoff`, `repair_model` and
+`convert_model` all accepted an output path and wrote to it verbatim.
+`make_viewer(out_html="/tmp/x.html")` wrote to `/tmp`. On a laptop that is
+convenience; with `forge3d serve` the caller is not necessarily trusted, and an
+arbitrary-write primitive is a way to plant a cron entry or overwrite an
+authorised-keys file.
+
+All five now go through one helper, `_safe_out()`, which resolves the path and
+refuses anything outside `FORGE3D_WORKDIR`. `resolve()` follows symlinks, so a
+link planted inside the work directory that points out is refused as well.
+`create_handoff` checks its sibling `.md` too — the markdown would otherwise have
+slipped past the guard.
+
+Local CLI use is unaffected: `forge3d viewer --out /tmp/x.html` still works,
+because the CLI calls the engine directly and never had a trust boundary to
+enforce. `FORGE3D_ALLOW_OUTSIDE_WORKDIR=1` opens the guard for local scripts and
+must never be set on a server.
+
+### Fixed — `convert_model` could overwrite its own input
+
+Converting a `.glb` to `glb` with `out_path` equal to the input re-exported the
+file in place: the bytes changed and materials could be dropped. Both
+`convert_model` and `repair_model` now detect that case and write
+`<name>_converted.<ext>` / `<name>_repaired.glb` instead. The input is never
+modified.
+
+Default destinations also moved inside the work directory
+(`<workdir>/converted/`, `<workdir>/repaired/`). They used to be written next to
+the input, which meant converting a caller-supplied file littered the caller's
+directory — and, now, would have been refused anyway.
+
+### Fixed — `make_viewer(None)` raised `TypeError`
+
+`_need()` now type-checks before touching `pathlib` and returns
+`{"ok": false, "error": "path must be a string, got NoneType"}`. The MCP schema
+normally prevents this; a direct Python call did not.
+
+### Tests
+
+445 passing (was 428). New `tests/test_output_paths.py` (17) covers each of the
+five tools refusing an outside path, a symlink escape, the default staying inside
+the work directory, the opt-in escape hatch, convert and repair not touching their
+input, and non-string paths reporting cleanly.
+
 ## [0.6.5] — 2026-11-01
 
 Pipeline reliability hardening. Two defects, both confirmed against the source
