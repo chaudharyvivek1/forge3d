@@ -13,6 +13,8 @@ The agent's code must define a function `build()` returning a
 from __future__ import annotations
 
 import io
+import json
+import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -87,6 +89,15 @@ class ProceduralBackend(Backend):
                 log="See examples/procedural_chair.py for the expected shape.",
             )
 
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # subprocess mode: a killable child with rlimits. This is the mode to use
+        # whenever the caller is not fully trusted, and the default when serving
+        # over HTTP. See docs/security.md.
+        if settings.resolved_exec_mode() == "subprocess":
+            return self._generate_subprocess(spec, out_dir, source, settings)
+
         namespace: dict = {
             "__name__": "forge3d_model",
             "trimesh": trimesh,
@@ -131,8 +142,6 @@ class ProceduralBackend(Backend):
                 log="Return a trimesh.Trimesh, trimesh.Scene, or a non-empty list of them.",
             )
 
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
         glb = out_dir / f"{spec.name}.glb"
         stl = out_dir / f"{spec.name}.stl"
         result.export(str(glb))
@@ -146,6 +155,54 @@ class ProceduralBackend(Backend):
             log=(stdout + stderr)[-4000:],
             extra_outputs={"stl": str(stl)},
             meta={"engine": "trimesh", "faces": len(flat.faces)},
+        )
+
+    def _generate_subprocess(self, spec: ModelSpec, out_dir: Path, source: str,
+                             settings) -> BackendResult:
+        """Run the model code in a child process that can actually be killed.
+
+        This is the honest answer to "Python cannot kill a thread": a process
+        boundary gives real cancellation (the parent kills it on timeout) and real
+        resource ceilings (rlimits in the child). Cost: ~1s of interpreter and
+        import startup per generation.
+        """
+        from ..platform_support import atomic_write, run
+
+        code_path = out_dir / f"{spec.name}_source.py"
+        atomic_write(code_path, source)
+        glb = out_dir / f"{spec.name}.glb"
+        stl = out_dir / f"{spec.name}.stl"
+
+        cmd = [
+            sys.executable, "-m", "forge3d.sandbox_runner",
+            str(code_path), str(glb), str(stl),
+            json.dumps(spec.to_dict()), str(settings.mem_limit_mb),
+        ]
+        proc = run(cmd, timeout=settings.code_timeout, cwd=str(out_dir))
+
+        if proc.timed_out:
+            return BackendResult(
+                ok=False,
+                error=f"model code exceeded {settings.code_timeout}s and was killed",
+                log=(proc.output or "")[-4000:] +
+                    f"\nforge3d: child process terminated after {settings.code_timeout}s "
+                    "(real cancellation, not abandonment).",
+            )
+
+        if not glb.exists():
+            return BackendResult(
+                ok=False,
+                error=f"model code failed in the sandbox (exit {proc.returncode})",
+                log=(proc.output or "")[-4000:],
+            )
+
+        return BackendResult(
+            ok=True,
+            path=str(glb),
+            log=(proc.output or "")[-4000:],
+            extra_outputs={"stl": str(stl), "source": str(code_path)},
+            meta={"engine": "trimesh", "mode": "subprocess",
+                  "mem_limit_mb": settings.mem_limit_mb},
         )
 
     @staticmethod
