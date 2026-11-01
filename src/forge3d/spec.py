@@ -13,6 +13,7 @@ import unicodedata
 from dataclasses import asdict, dataclass, field
 
 PURPOSES = ("print", "web", "game", "cad", "any")
+MODES = ("auto", "local", "cloud")
 UNITS = ("mm", "cm", "m", "in")
 
 # Names that are illegal as file or directory names on Windows, whatever the
@@ -82,6 +83,10 @@ class ModelSpec:
     constraints: list[str] = field(default_factory=list)
     references: list[str] = field(default_factory=list)
     seed: int | None = None
+    # auto    — route on fit, may use a hosted provider
+    # local   — never call a paid provider, even if it would fit better
+    # cloud   — only hosted providers
+    mode: str = "auto"
 
     def __post_init__(self) -> None:
         self.name = _slug(self.name or self.prompt)
@@ -92,6 +97,9 @@ class ModelSpec:
         self.units = (self.units or "mm").lower()
         if self.units not in UNITS:
             self.units = "mm"
+        self.mode = (self.mode or "auto").lower()
+        if self.mode not in MODES:
+            self.mode = "auto"
 
     # ---- serialisation -------------------------------------------------
     def to_dict(self) -> dict:
