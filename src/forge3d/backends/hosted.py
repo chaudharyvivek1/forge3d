@@ -28,6 +28,7 @@ from ..config import get_settings
 from ..providers import registry
 from ..providers.base import (
     SUCCEEDED,
+    AmbiguousSubmission,
     GenerationRequest,
     ProviderError,
     request_with_retries,
@@ -57,11 +58,29 @@ class HostedBackend(Backend):
 
     # -- availability ----------------------------------------------------
     def available(self) -> bool:
-        return bool(registry.available())
+        """True only if the provider that configuration *selects* is usable.
+
+        Reporting "available" because some other provider has a key is how you
+        get a green light followed by a failure: `FORGE3D_PROVIDER=meshy` with no
+        Meshy key used to look available as soon as Tripo was configured.
+        """
+        try:
+            return registry.resolve(get_settings().provider).available()
+        except ProviderError:
+            return False
 
     def describe(self) -> dict:
         info = super().describe()
         info["providers"] = registry.list_providers()
+        try:
+            selected = registry.resolve(get_settings().provider)
+            info["selected_provider"] = selected.name
+            info["selected_available"] = selected.available()
+            info["selected_verified"] = selected.verified
+        except ProviderError as exc:
+            info["selected_provider"] = None
+            info["selected_available"] = False
+            info["selected_reason"] = str(exc)
         return info
 
     def estimate(self, spec: ModelSpec) -> dict:
@@ -107,6 +126,17 @@ class HostedBackend(Backend):
 
         try:
             job = provider.submit(request)
+        except AmbiguousSubmission as exc:
+            # Do not retry, do not claim failure: the provider may have created a
+            # job. Hand the caller the key to reconcile with.
+            return BackendResult(
+                ok=False,
+                error=str(exc),
+                log="Reconcile before retrying — a second submit may create a second "
+                    "paid generation.",
+                meta={"provider": provider.name, "status": "uncertain",
+                      "idempotency_key": exc.idempotency_key},
+            )
         except ProviderError as exc:
             return BackendResult(ok=False, error=str(exc))
         except requests.RequestException as exc:
@@ -116,11 +146,23 @@ class HostedBackend(Backend):
         deadline = time.time() + settings.job_timeout
         while not job.done:
             if time.time() > deadline:
+                # Ask the provider to stop. Returning "failed" while the remote
+                # job keeps running and billing is the worst of both worlds.
+                cancelled = False
+                try:
+                    cancelled = provider.cancel(job.job_id)
+                except Exception:  # noqa: BLE001 - cancellation is best effort
+                    cancelled = False
                 return BackendResult(
                     ok=False,
-                    error=f"{provider.name} job {job.job_id} exceeded {settings.job_timeout}s",
+                    error=(f"{provider.name} job {job.job_id} exceeded "
+                           f"{settings.job_timeout}s"
+                           + (" and was cancelled" if cancelled
+                              else " and could not be cancelled — it may still be "
+                                   "running and billing at the provider")),
                     log=f"last status: {job.status}, progress {job.progress:.0%}",
-                    meta={"provider": provider.name, "job_id": job.job_id},
+                    meta={"provider": provider.name, "job_id": job.job_id,
+                          "cancelled": cancelled},
                 )
             time.sleep(poll)
             try:
