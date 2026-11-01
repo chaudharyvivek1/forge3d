@@ -29,6 +29,58 @@ UNCERTAIN = "uncertain"
 _PROCESS_LOCK = threading.Lock()
 
 
+# ---------------------------------------------------------------------------
+# heartbeat ticker (one thread for the whole process)
+# ---------------------------------------------------------------------------
+_ACTIVE_LOCK = threading.Lock()
+#: job_id -> (store root, last touch, interval)
+_ACTIVE: dict[str, tuple[Path, float, float]] = {}
+_TICKER_STARTED = False
+_TICKER_LOCK = threading.Lock()
+
+
+def _start_ticker() -> None:
+    global _TICKER_STARTED
+    with _TICKER_LOCK:
+        if _TICKER_STARTED:
+            return
+        _TICKER_STARTED = True
+        threading.Thread(target=_ticker_loop, name="forge3d-heartbeat",
+                         daemon=True).start()
+
+
+def _ticker_loop() -> None:
+    """Touch every registered job that is due, then sleep for the shortest gap.
+
+    The cadence adapts to the smallest registered interval so a caller asking for
+    a fast heartbeat gets one, while a production server with 20 s intervals is
+    not woken every 50 ms.
+    """
+    while True:
+        with _ACTIVE_LOCK:
+            due = list(_ACTIVE.items())
+            cadence = min((entry[2] for entry in _ACTIVE.values()), default=1.0)
+        time.sleep(min(max(cadence, 0.05), 2.0))
+
+        now = time.time()
+        for job_id, (root, last, interval) in due:
+            if now - last < interval:
+                continue
+            try:
+                store = JobStore(root)
+                job = store.get(job_id)
+                if job is None or job.status in (SUCCEEDED, FAILED, UNCERTAIN):
+                    with _ACTIVE_LOCK:
+                        _ACTIVE.pop(job_id, None)
+                    continue
+                store.touch(job_id)
+            except Exception:  # noqa: BLE001 - a heartbeat must never break a job
+                continue
+            with _ACTIVE_LOCK:
+                if job_id in _ACTIVE:
+                    _ACTIVE[job_id] = (root, now, interval)
+
+
 @dataclass
 class Job:
     id: str
@@ -129,27 +181,16 @@ class JobStore:
             atomic_write(self._path(job.id), json.dumps(job.to_dict(), indent=2))
 
     def auto_heartbeat(self, job_id: str, interval: float = 20.0) -> None:
-        """Keep a job fresh until it reaches a terminal state, then stop.
+        """Register a job to be kept fresh until it reaches a terminal state.
 
-        Self-terminating on purpose: it covers generation *and* the validation and
-        rendering that follow, which the old `with heartbeat()` block did not.
+        One shared ticker per process, not one thread per job. A thread per job
+        slept for a full interval before its first check, so every generation left
+        a live thread behind for at least 20 s — under load that exhausted the
+        thread pool, and it took the test suite down with `can't start new thread`.
         """
-        def beat() -> None:
-            while True:
-                time.sleep(interval)
-                try:
-                    job = self.get(job_id)
-                except Exception:  # noqa: BLE001
-                    return
-                if job is None or job.status in (SUCCEEDED, FAILED, UNCERTAIN):
-                    return
-                try:
-                    self.touch(job_id)
-                except Exception:  # noqa: BLE001
-                    return
-
-        threading.Thread(target=beat, name=f"auto-heartbeat-{job_id}",
-                         daemon=True).start()
+        with _ACTIVE_LOCK:
+            _ACTIVE[job_id] = (self.root, time.time(), max(0.05, float(interval)))
+        _start_ticker()
 
     @contextlib.contextmanager
     def heartbeat(self, job_id: str, interval: float = 30.0):
