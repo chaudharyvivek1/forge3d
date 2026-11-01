@@ -366,10 +366,15 @@ def test_auto_heartbeat_stops_once_the_job_is_terminal(tmp_path):
     time.sleep(0.15)
     job.status = SUCCEEDED
     store.save(job)
-    stamp = store.get(job.id).updated_at
 
+    # A touch that began before the transition may land just after it; what must
+    # hold is that the job stays finished and stops being refreshed.
+    time.sleep(0.2)
+    settled = store.get(job.id)
+    assert settled.status == SUCCEEDED, "the heartbeat resurrected a finished job"
     time.sleep(0.3)
-    assert store.get(job.id).updated_at == stamp, "heartbeat kept writing after the job ended"
+    assert store.get(job.id).updated_at == settled.updated_at, (
+        "heartbeat kept writing after the job ended")
 
 
 def test_meshy_cancels_an_image_job_on_the_image_endpoint(monkeypatch):
