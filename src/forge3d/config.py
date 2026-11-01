@@ -52,6 +52,24 @@ class Settings:
     code_timeout: int = field(default_factory=lambda: _env_int("FORGE3D_CODE_TIMEOUT", 120))
     job_timeout: int = field(default_factory=lambda: _env_int("FORGE3D_JOB_TIMEOUT", 900))
 
+    # How agent-written model code runs.
+    #   inprocess  — exec() in the server process. Fast, no isolation, and a
+    #                timeout can only abandon the work (Python cannot kill a
+    #                thread). Only safe for a stdio server you started yourself.
+    #   subprocess — a child process with rlimits and a hard kill on timeout.
+    #                Real cancellation, real memory ceiling. Slower to start.
+    #   auto       — inprocess for stdio, subprocess when serving HTTP.
+    exec_mode: str = field(default_factory=lambda: os.environ.get("FORGE3D_EXEC_MODE", "auto").lower())
+    # Memory ceiling for subprocess mode, in MiB. 0 disables it. Not a substitute
+    # for a container: it bounds address space, not every kind of allocation.
+    mem_limit_mb: int = field(default_factory=lambda: _env_int("FORGE3D_MEM_LIMIT_MB", 0))
+
+    def resolved_exec_mode(self) -> str:
+        mode = self.exec_mode
+        if mode in ("inprocess", "subprocess"):
+            return mode
+        return "subprocess" if os.environ.get("FORGE3D_TRANSPORT") == "http" else "inprocess"
+
     def ensure_workdir(self) -> Path:
         self.workdir.mkdir(parents=True, exist_ok=True)
         return self.workdir
