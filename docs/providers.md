@@ -129,9 +129,16 @@ job, and a blind retry buys a second generation. `submit_request()` therefore:
 - passes `idempotent=False`, which disables retries on timeouts and 5xx;
 - raises `AmbiguousSubmission` on an ambiguous timeout, carrying the key.
 
-The backend turns that into `status: uncertain` — not `failed` — because claiming
-failure invites a retry that costs money. Reconcile against the provider with the
-key first.
+A 5xx counts as ambiguous too: "created, then failed to answer" is exactly the
+case a blind retry duplicates.
+
+The backend turns this into `status: uncertain` — not `failed` — and the job store
+persists it, so `get_job` and the `create_model` response both carry the state and
+the key. Claiming failure invites a retry that costs money.
+
+Pass your own `idempotency_key` to `create_model` when the *caller* may retry: a
+fresh random key only protects against forge3d's own retries, not against a user
+resubmitting the same request.
 
 ## Availability means the *selected* provider
 
