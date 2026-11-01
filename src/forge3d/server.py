@@ -30,6 +30,7 @@ from fastmcp.server.middleware import Middleware
 
 from . import backends, context, meshio, platform_support, render, repair, validate, viewer
 from . import handoff as handoff_mod
+from . import jobs as jobs_mod
 from .config import get_settings
 from .jobs import JobStore
 from .spec import ModelSpec  # noqa: F401 - re-exported for callers of this module
@@ -232,6 +233,7 @@ def create_model(
     materials: list[str] | None = None,
     seed: int | None = None,
     mode: str = "auto",
+    idempotency_key: str | None = None,
     scale_to_spec: bool = False,
     render_previews: bool = True,
     make_viewer: bool = True,
@@ -253,6 +255,7 @@ def create_model(
         prompt=prompt, name=name, purpose=purpose, units=units, dimensions=dimensions,
         style=style, poly_budget=poly_budget, constraints=constraints, references=references,
         materials=materials, seed=seed, mode=mode,
+        idempotency_key=idempotency_key,
     )
     store = _store()
     store.recover_stale()
@@ -278,11 +281,13 @@ def create_model(
                     f"Waited {settings.queue_wait}s for a free slot; an unbounded queue would "
                     f"hide an overload the client needs to see.",
         }
+    # Heartbeat runs until the job reaches a terminal state, so it also covers
+    # validation and rendering — the window where a slow render used to let
+    # recover_stale() kill a healthy job.
+    store.auto_heartbeat(job.id)
+
     try:
-        # Heartbeat while the backend runs: without it a slow generation looks
-        # stale and the next request's recover_stale() would kill it.
-        with store.heartbeat(job.id):
-            used, result = backends.run(backend, spec, out_dir, source=source)
+        used, result = backends.run(backend, spec, out_dir, source=source)
     except Exception as exc:  # never leak a stack trace to the agent
         store.fail(job, str(exc))
         return {"ok": False, "job_id": job.id, "error": str(exc), "hint": "check the backend name with list_backends"}
@@ -290,6 +295,26 @@ def create_model(
         slots.release()
 
     if not result.ok:
+        # An uncertain submission is NOT a failure. Recording it as `failed`
+        # invites the caller to retry, which is exactly how you buy two paid
+        # generations for one request.
+        if (result.meta or {}).get("status") == "uncertain":
+            job.status = jobs_mod.UNCERTAIN
+            job.error = result.error
+            job.meta = dict(result.meta or {})
+            store.save(job)
+            return {
+                "ok": False,
+                "uncertain": True,
+                "job_id": job.id,
+                "status": jobs_mod.UNCERTAIN,
+                "error": result.error,
+                "idempotency_key": (result.meta or {}).get("idempotency_key"),
+                "provider": (result.meta or {}).get("provider"),
+                "hint": ("The provider may have created this job. Do NOT resubmit. "
+                         "Check the provider dashboard, or call get_job with this id; "
+                         "pass the same idempotency_key to any retry."),
+            }
         store.fail(job, result.error or "generation failed")
         return {
             "ok": False,
