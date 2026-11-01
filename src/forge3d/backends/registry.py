@@ -12,6 +12,7 @@ from .base import Backend, BackendResult
 from .blender import BlenderBackend
 from .cadquery_backend import CadQueryBackend
 from .hosted import HostedBackend
+from .image_backend import ImageBackend
 from .openscad import OpenscadBackend
 from .procedural import ProceduralBackend
 
@@ -19,6 +20,7 @@ ALL: dict[str, Backend] = {
     b.name: b
     for b in (
         ProceduralBackend(),
+        ImageBackend(),
         OpenscadBackend(),
         BlenderBackend(),
         CadQueryBackend(),
@@ -77,8 +79,18 @@ def resolve_auto(spec: ModelSpec, source: str | None = None, purpose_hint: str |
     if purpose == "web":
         # Web wants a textured GLB; a hosted model is the only textured route.
         return "hosted" if ALL["hosted"].available() else "procedural"
-    if spec.references and ALL["hosted"].available():
-        return "hosted"
+    # A local image file is the one case where image-to-3D is deterministic and
+    # needs no GPU: derive real geometry from the pixels instead of shipping the
+    # file to a provider.
+    if spec.references:
+        first = str(spec.references[0])
+        if not first.startswith(("http://", "https://")):
+            from pathlib import Path
+
+            if Path(first).expanduser().is_file():
+                return "image"
+        if ALL["hosted"].available():
+            return "hosted"
     return "procedural"
 
 
