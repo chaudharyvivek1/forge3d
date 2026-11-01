@@ -26,7 +26,7 @@ Everything else is plumbing around those four.
         ▼                  ▼                  ▼
    ┌─────────┐      ┌────────────┐     ┌───────────┐
    │ spec.py │      │ backends/  │     │  jobs.py  │
-   │  brief  │      │ 5 engines  │     │ durable   │
+   │  brief  │      │ 6 engines  │     │ durable   │
    └────┬────┘      └─────┬──────┘     └───────────┘
         │                 │
         │                 ▼
