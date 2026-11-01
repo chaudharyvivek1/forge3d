@@ -4,6 +4,87 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.6.3] — 2026-11-01
+
+Security and execution hardening. The third external review found five P1 gaps
+that v0.6.2's tests could not catch; all are fixed, plus the P2 items it listed.
+
+### Fixed — SSRF, properly this time (P1)
+
+- **DNS rebinding / TOCTOU.** v0.6.2 resolved a hostname to validate it, then
+  handed the *hostname* to an HTTP client which resolved it again — an attacker
+  could answer public first and private second. Connections are now **pinned to
+  the validated IP** (`urllib3` with `server_hostname`/`assert_hostname`, so TLS
+  verification still binds to the real hostname). The address that is checked is
+  the address that is dialled.
+- **Blocklist → allowlist.** `_blocked_reason` enumerated bad ranges, and
+  `100.64.0.0/10` (carrier-grade NAT) is neither `is_private` nor `is_reserved`,
+  so it slipped through. The rule is inverted: **an address must be `is_global`**.
+- **Provider asset downloads are now guarded too.** This was a second, separate
+  SSRF path: a provider or compromised generic worker could return
+  `http://127.0.0.1:9200/` and forge3d would fetch it. Downloads now go through
+  the same guard, stream to disk under `FORGE3D_MAX_DOWNLOAD_MB`, and honour an
+  optional `FORGE3D_TRUSTED_DOWNLOAD_HOSTS` allowlist.
+- **Proxy behaviour is declared, not silent.** A proxy resolves destinations
+  itself, so pinning cannot apply. Proxied fetches are marked `proxied=True`, and
+  `FORGE3D_ALLOW_PROXY_FETCH=false` refuses them.
+
+### Fixed — uncertain submissions reach the caller (P1)
+
+- **A 5xx on a submit is now ambiguous**, not a plain failure. "Created, then
+  failed to answer" is exactly what a blind retry duplicates.
+- **`uncertain` is a real job state.** `jobs.UNCERTAIN` is persisted, and
+  `create_model` returns `{uncertain: true, status: "uncertain", idempotency_key}`
+  with "Do NOT resubmit" guidance. It previously recorded `failed` and dropped the
+  metadata, which is what invited the duplicate.
+- **Callers can supply an idempotency key**, so a retried *request* dedupes at the
+  provider — a fresh random key only protects against forge3d's own retries.
+
+### Fixed — Blender limits (P1)
+
+- **Blender now gets real resource limits.** `platform_support.run(limits=True)`
+  applies `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE` and
+  `RLIMIT_CORE` in the forked child. Previously it reported `isolation: rlimit`
+  while applying nothing.
+- **Blender uses `FORGE3D_CODE_TIMEOUT`**, not a hardcoded 600s.
+- When limits genuinely cannot be applied (Windows), the label says so:
+  `"none (resource limits unavailable on this platform)"`. A fallback named
+  `rlimit` must not imply limits that were not applied.
+
+### Fixed — CadQuery parity (P2)
+
+- **`spec` is in the subprocess namespace**, matching in-process mode. A source
+  file using the spec used to work in one mode and fail in the other.
+- **Every required output is checked.** STEP succeeding while STL failed was
+  reported as success with a path that did not exist.
+
+### Fixed — P2
+
+- **Heartbeat covers the whole pipeline.** It self-terminates when the job reaches
+  a terminal state, so validation and rendering are covered — the window where a
+  slow render let `recover_stale()` kill a healthy job.
+- **Polling failures cancel the remote job**, like timeouts do.
+- **Meshy cancels image jobs on the image endpoint** (it always used the text one).
+- **Downloaded reference images are cleaned up**; they accumulated per generation.
+- **`allowed_hosts`** no longer defaults to `["*"]` on a public bind.
+
+### Documentation
+
+- README no longer claims provider integrations do not exist, and now describes
+  the rate limiter accurately (in-process token bucket, not a distributed quota)
+  and states that **a bearer token is not a permission system**.
+- `.env.example` documents that `FORGE3D_ALLOW_CODE_EXEC` gates three backends,
+  and lists the new network variables.
+
+### Tests
+
+402 passing (was 377). New `tests/test_hardening_v3.py` (25) covers IP pinning,
+rebinding fail-closed behaviour, five non-global ranges, provider-download SSRF,
+redirect refusal on download, the trusted-host allowlist, 5xx-as-ambiguous,
+uncertain state through `create_model`, caller-supplied keys, real rlimits, the
+honest Blender label, CadQuery parity, heartbeat termination, Meshy cancel
+routing, and reference-image cleanup.
+
 ## [0.6.2] — 2026-11-01
 
 Security and core reliability, from an external review. Five P1 findings fixed,
