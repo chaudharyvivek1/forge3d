@@ -11,7 +11,12 @@
 #
 # Build:  docker build -t forge3d .
 # Stdio:  docker run -i --rm -v "$PWD/work:/work" forge3d
-# HTTP:   docker run --rm -p 8000:8000 -v "$PWD/work:/work" forge3d forge3d-mcp --http 8000
+# HTTP:   docker run --rm -p 8000:8000 -e FORGE3D_HTTP_TOKEN=... \
+#             -v "$PWD/work:/work" forge3d --http 8000 --host 0.0.0.0
+#
+# A non-loopback bind refuses to start without FORGE3D_HTTP_TOKEN. Running as
+# non-root is deliberate: model code executes in this container. See
+# docs/security.md before exposing the port.
 
 FROM python:3.12-slim AS base
 
@@ -31,7 +36,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN pip install --upgrade pip && pip install ".[render]"
+RUN pip install --upgrade pip && pip install ".[render,http]"
 
 # Run as a non-root user: generated models are user data, not image content.
 RUN useradd --create-home --uid 10001 forge3d \
