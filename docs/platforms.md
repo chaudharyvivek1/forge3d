@@ -8,10 +8,11 @@ the honest state of that, per platform — including what does *not* work.
 | | Linux | macOS | Windows | Docker | Agent sandbox |
 |---|---|---|---|---|---|
 | `procedural` backend | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `image` backend | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `openscad` backend | ✅ apt/snap | ✅ brew | ✅ winget | ⚠️ extend image | ⚠️ usually absent |
 | `blender` backend | ✅ snap/apt | ✅ cask | ✅ winget | ⚠️ extend image | ❌ |
 | `cadquery` backend | ✅ pip | ✅ pip | ⚠️ pip, needs OCCT wheels | ✅ pip | ⚠️ heavy |
-| `hosted` backend | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `hosted` backend (Meshy/Tripo/Rodin keys, or `FORGE3D_HOSTED_URL`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | CPU preview renders | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Single-file viewer | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MCP over stdio | ✅ | ✅ | ✅ | ✅ | ✅ |
