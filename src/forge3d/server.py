@@ -1,4 +1,4 @@
-"""The MCP surface — one server, twenty tools, any agent.
+"""The MCP surface — one server, twenty-one tools, any agent.
 
 Design rules this file follows, because they are what make an MCP server usable
 by a *generic* agent rather than only by its author:
@@ -736,6 +736,31 @@ def create_shape(
                  else "the shape is fine but not a closed solid — fine for display, "
                       "not for printing. Try a different family, or repair_model."),
     }
+
+
+@mcp.tool
+def list_providers(check: bool = False) -> dict:
+    """List text-to-3D providers: what is configured here, and what is verified.
+
+    Call this before choosing `backend="hosted"`. `available` means credentials
+    exist on this machine; `verified` means the adapter has been exercised against
+    a live account by the maintainer. Most commercial adapters are NOT verified —
+    pass check=true to make a real authenticated request and settle it.
+    """
+    from .providers import registry as provider_registry
+
+    providers = provider_registry.list_providers()
+    result = {
+        "ok": True,
+        "providers": providers,
+        "configured": [p["name"] for p in providers if p["available"]],
+        "unverified": [p["name"] for p in providers if not p["verified"]],
+        "hint": "set FORGE3D_PROVIDER + the provider's key env var, then "
+                "backend='hosted'. Or point FORGE3D_HOSTED_URL at your own worker.",
+    }
+    if check:
+        result["checks"] = provider_registry.check_all()
+    return result
 
 
 @mcp.tool
