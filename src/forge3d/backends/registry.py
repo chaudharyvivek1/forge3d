@@ -57,8 +57,18 @@ def _looks_like_scad(src: str) -> bool:
 
 
 def resolve_auto(spec: ModelSpec, source: str | None = None, purpose_hint: str | None = None) -> str:
-    """Pick a backend from the brief. Explicit signals beat heuristics."""
+    """Pick a backend from the brief. Explicit signals beat heuristics.
+
+    `spec.mode` is a hard constraint, not a preference: `local` never returns a
+    paid provider, and `cloud` never returns a local engine. Silently upgrading a
+    user into a billable API call is the kind of helpfulness nobody wants.
+    """
     purpose = (purpose_hint or spec.purpose or "any").lower()
+    mode = (getattr(spec, "mode", "auto") or "auto").lower()
+    hosted_ok = mode in ("auto", "cloud") and ALL["hosted"].available()
+
+    if mode == "cloud":
+        return "hosted"
 
     if source:
         head = source[:2000].lower()
@@ -77,8 +87,9 @@ def resolve_auto(spec: ModelSpec, source: str | None = None, purpose_hint: str |
     if purpose == "game" and ALL["blender"].available():
         return "blender"
     if purpose == "web":
-        # Web wants a textured GLB; a hosted model is the only textured route.
-        return "hosted" if ALL["hosted"].available() else "procedural"
+        # Web wants a textured GLB, and a hosted model is the only textured
+        # route — but only when the caller has not asked to stay local.
+        return "hosted" if hosted_ok else "procedural"
     # A local image file is the one case where image-to-3D is deterministic and
     # needs no GPU: derive real geometry from the pixels instead of shipping the
     # file to a provider.
@@ -89,7 +100,7 @@ def resolve_auto(spec: ModelSpec, source: str | None = None, purpose_hint: str |
 
             if Path(first).expanduser().is_file():
                 return "image"
-        if ALL["hosted"].available():
+        if hosted_ok:
             return "hosted"
     return "procedural"
 
