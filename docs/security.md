@@ -174,6 +174,10 @@ The image backend accepts URLs. `requests.get(url)` + `.content` — the obvious
 implementation, and the one this repo shipped — is a server-side request forgery
 primitive and a memory-exhaustion bug. `netguard.py` now enforces:
 
+- **output paths**: every tool that writes a file resolves its destination and
+  refuses anything outside `FORGE3D_WORKDIR`, following symlinks. Without this a
+  caller could ask for a viewer at `/etc/cron.d/x`. `FORGE3D_ALLOW_OUTSIDE_WORKDIR=1`
+  disables it for local CLI scripts — never set it on a server;
 - **scheme**: http/https only;
 - **address pinning**: the validated IP is the IP that is dialled, with the
   hostname kept for TLS verification — resolving a name and then handing the name
