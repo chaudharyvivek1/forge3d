@@ -57,6 +57,56 @@ profile, or a dedicated sandbox runtime — which is why the Dockerfile runs as
 non-root and why HTTP mode forces subprocess isolation rather than claiming to be
 safe on its own.
 
+### 2b. OS-level sandbox — `FORGE3D_SANDBOX`
+
+`auto` (default) uses **bubblewrap** when it is installed, which gives real
+filesystem and network isolation for unprivileged users:
+
+```
+bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp \
+      --unshare-net --unshare-pid --unshare-uts --unshare-ipc \
+      --die-with-parent --new-session \
+      --bind <workdir> <workdir> --chdir <workdir> -- python -m forge3d.sandbox_runner ...
+```
+
+The child sees a read-only root, a private `/tmp`, no network, its own PID
+namespace, and write access only to the work directory. `FORGE3D_SANDBOX=unshare`
+opts into `unshare --net` instead (needs capabilities that most containers
+withhold, so it is never attempted by default). `FORGE3D_SANDBOX=none` turns it
+off.
+
+The job metadata records `isolation` — `bwrap`, `unshare-net` or `rlimit` — so an
+audit reads what actually ran, not what was configured. `forge3d doctor` reports
+the same, plus a self-test that executes a trivial command through the wrapper
+rather than assuming it works. A sandbox that silently fails to apply is worse
+than none.
+
+### 2c. Resource limits
+
+In subprocess mode the child sets, after importing its heavy dependencies:
+
+| Limit | Value | Why |
+|---|---|---|
+| `RLIMIT_CPU` | `FORGE3D_CODE_TIMEOUT` | a slow build cannot monopolise a core |
+| `RLIMIT_AS` | `FORGE3D_MEM_LIMIT_MB` (default 0 = off) | bounds address space |
+| `RLIMIT_FSIZE` | 512 MiB | a runaway loop cannot fill the disk |
+| `RLIMIT_NOFILE` | 256 | no thousand-socket fan-out |
+| `RLIMIT_CORE` | 0 | no core dumps on disk |
+
+### 2d. Environment scrubbing
+
+The child never inherits the parent's environment wholesale. Anything matching
+`KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|PRIVATE|SESSION|COOKIE` is dropped, so
+`FORGE3D_HOSTED_KEY` and cloud credentials are not reachable from agent-written
+code. What survives is what a process needs to *run*: `PATH`, `HOME`, the
+`PYTHON*` family, locale, temp dirs.
+
+That last part is not cosmetic. A first attempt used a fixed allowlist and broke
+`pip install --user` installs, because `PYTHONUSERBASE` was dropped and the child
+could no longer import forge3d at all. Hardening that breaks the product is not
+hardening; the policy is now pattern-based with an explicit deny list, and a test
+asserts secrets do not survive while the interpreter still works.
+
 ### 3. The recommendation
 
 - Local stdio server for your own agent → defaults are fine.
