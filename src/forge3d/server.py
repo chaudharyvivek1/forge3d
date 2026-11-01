@@ -279,7 +279,10 @@ def create_model(
                     f"hide an overload the client needs to see.",
         }
     try:
-        used, result = backends.run(backend, spec, out_dir, source=source)
+        # Heartbeat while the backend runs: without it a slow generation looks
+        # stale and the next request's recover_stale() would kill it.
+        with store.heartbeat(job.id):
+            used, result = backends.run(backend, spec, out_dir, source=source)
     except Exception as exc:  # never leak a stack trace to the agent
         store.fail(job, str(exc))
         return {"ok": False, "job_id": job.id, "error": str(exc), "hint": "check the backend name with list_backends"}
