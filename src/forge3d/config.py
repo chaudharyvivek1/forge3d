@@ -48,6 +48,8 @@ class Settings:
     hosted_url: str | None = field(default_factory=lambda: os.environ.get("FORGE3D_HOSTED_URL"))
     hosted_key: str | None = field(default_factory=lambda: os.environ.get("FORGE3D_HOSTED_KEY"))
     hosted_provider: str = field(default_factory=lambda: os.environ.get("FORGE3D_HOSTED_PROVIDER", "generic"))
+    # Which text-to-3D provider to use: auto | generic | meshy | tripo | rodin
+    provider: str = field(default_factory=lambda: os.environ.get("FORGE3D_PROVIDER", "auto"))
 
     # Executing agent-written Python is the most capable backend, and the most
     # dangerous one. It is on by default because forge3d is normally run as a
