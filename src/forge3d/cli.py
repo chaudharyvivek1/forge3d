@@ -47,6 +47,40 @@ def cmd_backends(_args) -> int:
     return 0
 
 
+def cmd_demo(args) -> int:
+    """Generate, validate and view a model with no arguments and no extra software.
+
+    Everything here runs on the base install: no Blender, no OpenSCAD, no API key,
+    no network. It exists so `forge3d demo` is a true one-command try-it.
+    """
+    from . import server
+
+    shape = args.shape or "supershape"
+    print(f"forge3d demo — building a {shape}, validating it, and writing a viewer\n")
+
+    out = server.create_shape(
+        shape=shape, resolution=args.resolution, name=f"demo-{shape}",
+        purpose="game", render_previews=True, make_viewer=True,
+    )
+    if not out["ok"]:
+        print(f"  failed: {out.get('error')}")
+        return 1
+
+    card = out["card"]
+    print(f"  model      {out['path']}")
+    print(f"  triangles  {card['triangles']:,}")
+    print(f"  size       {card['extents']}")
+    print(f"  watertight {card['watertight']}")
+    print(f"  validation {out['validation']['summary']}")
+    for name, path in (out.get("previews") or {}).items():
+        print(f"  preview    {path}  ({name})")
+    if out.get("viewer"):
+        print(f"  viewer     {out['viewer']}")
+    print("\nOpen the viewer in a browser — it is one self-contained file.")
+    print("Then try: forge3d create --prompt 'a chair' --backend procedural")
+    return 0
+
+
 def cmd_providers(args) -> int:
     from .providers import registry as provider_registry
 
@@ -209,6 +243,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("backends", help="list geometry engines").set_defaults(func=cmd_backends)
+
+    demo = sub.add_parser("demo", help="one-command try-it: build, validate, view")
+    demo.add_argument("--shape", default="supershape",
+                      help="any name from `list_shapes` (default: supershape)")
+    demo.add_argument("--resolution", type=int, default=96)
+    demo.set_defaults(func=cmd_demo)
 
     prov = sub.add_parser("providers", help="list text-to-3D providers and their status")
     prov.add_argument("--check", nargs="?", const=True, default=False,
