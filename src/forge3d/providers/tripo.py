@@ -76,7 +76,8 @@ class TripoProvider(GenerationProvider):
             if request.negative_prompt:
                 payload["negative_prompt"] = request.negative_prompt
 
-        resp = self.submit_request(f"{self.base_url()}/v2/openapi/task", payload)
+        resp = self.submit_request(f"{self.base_url()}/v2/openapi/task", payload,
+                                    idempotency_key=request.extra.get("idempotency_key"))
         data = self._unwrap(resp, "submit")
         job_id = data.get("task_id") or data.get("id")
         if not job_id:
