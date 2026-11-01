@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -170,9 +171,57 @@ def install_hint(name: str) -> str:
 # ---------------------------------------------------------------------------
 # subprocess
 # ---------------------------------------------------------------------------
+# Child environment policy: keep what a process needs to *run*, drop anything
+# that looks like a credential. Deny wins over allow, so a variable named
+# FORGE3D_HOSTED_KEY or AWS_SECRET_ACCESS_KEY never reaches agent-written code
+# even if some future allowlist mentions its prefix.
+_ENV_DENY = re.compile(
+    r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|PRIVATE|SESSION|COOKIE)",
+    re.IGNORECASE,
+)
+
+_ENV_KEEP_EXACT = frozenset({
+    "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR",
+    "TMPDIR", "TEMP", "TMP", "TERM", "VIRTUAL_ENV", "CONDA_PREFIX",
+    "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "SSL_CERT_FILE", "SSL_CERT_DIR",
+})
+
+# Prefixes that are never secrets and are load-bearing for the interpreter.
+# PYTHONUSERBASE in particular: `pip install --user` and several distro builds
+# put the package there, and dropping it made the child unable to import forge3d
+# at all — hardening that breaks the product is not hardening.
+_ENV_KEEP_PREFIX = ("PYTHON", "LC_", "XDG_")
+
+
+def child_env(extra: dict | None = None) -> dict[str, str]:
+    """A minimal, UTF-8-forced environment for child processes.
+
+    `PYTHONIOENCODING`/`PYTHONUTF8` are not cosmetic: on Windows the default
+    console encoding is cp1252, so a Python child that prints a Devanagari or CJK
+    string dies with UnicodeEncodeError. The parent decoding UTF-8 is only half
+    the fix — the child has to *emit* UTF-8 too. That exact bug failed the
+    Windows CI job.
+
+    Pass `extra` for values the child genuinely needs (e.g. the code timeout for
+    its own CPU rlimit); they are merged last and override everything.
+    """
+    env: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if _ENV_DENY.search(key):
+            continue
+        if key in _ENV_KEEP_EXACT or key.startswith(_ENV_KEEP_PREFIX):
+            env[key] = value
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    if extra:
+        env.update(extra)
+    return env
+
+
 def run(cmd: list[str], timeout: int = 300, cwd: str | Path | None = None,
-        stdin_text: str | None = None) -> RunResult:
-    """Run a command with UTF-8 I/O and a hard timeout, on any platform.
+        stdin_text: str | None = None, env: dict | None = None) -> RunResult:
+    """Run a command with UTF-8 I/O, a scrubbed environment and a hard timeout.
 
     `encoding="utf-8"` with `errors="replace"` is deliberate: without it, a
     single non-ASCII character in a tool's error message raises
@@ -188,6 +237,7 @@ def run(cmd: list[str], timeout: int = 300, cwd: str | Path | None = None,
             timeout=timeout,
             cwd=str(cwd) if cwd else None,
             input=stdin_text,
+            env=child_env(env),
             creationflags=_CREATE_NO_WINDOW,
         )
     except subprocess.TimeoutExpired as exc:
@@ -321,6 +371,11 @@ def doctor(workdir: str | Path | None = None) -> dict:
                          **({} if hosted_url
                             else {"install": "set FORGE3D_HOSTED_URL to your text-to-3D worker"})}
 
+    from .config import get_settings as _get_settings
+
+    settings = _get_settings()
+    _cmd, isolation = sandbox_command(["true"], workdir, settings.sandbox)
+
     report = {
         "forge3d": __version__,
         "platform": {
@@ -335,6 +390,13 @@ def doctor(workdir: str | Path | None = None) -> dict:
             "cpu_count": os.cpu_count(),
         },
         "engines": engines,
+        "sandbox": {
+            "requested": settings.sandbox,
+            "effective": isolation,
+            "backends": sandbox_backends(),
+            "note": ("OS-level isolation active" if isolation != "rlimit"
+                     else "rlimits only — install bubblewrap for filesystem and network isolation"),
+        },
         "packages": packages,
         "workdir": {
             "path": str(workdir) if workdir else None,
@@ -357,9 +419,90 @@ def doctor(workdir: str | Path | None = None) -> dict:
         hints.append("matplotlib missing — previews will be skipped: pip install matplotlib")
     if not packages["scipy"]["installed"]:
         hints.append("scipy missing — body count and volume are unavailable: pip install scipy")
+    if isolation == "rlimit" and not sandbox_backends()["bwrap"]:
+        hints.append("bubblewrap not found — model code gets rlimits but no filesystem or "
+                     "network isolation: install bwrap (apt install bubblewrap)")
     if IS_WINDOWS:
         hints.append("Windows: if a binary is installed but not found, set FORGE3D_OPENSCAD / "
                      "FORGE3D_BLENDER to its full .exe path")
     report["hints"] = hints
     report["ready"] = bool(engines["procedural"]["available"])
     return report
+
+
+# ---------------------------------------------------------------------------
+# OS-level sandboxing for model code
+# ---------------------------------------------------------------------------
+def sandbox_backends() -> dict:
+    """Which isolation mechanisms exist on this machine."""
+    return {
+        "bwrap": shutil.which("bwrap"),
+        "unshare": shutil.which("unshare") if IS_LINUX else None,
+        "rlimit": True,
+    }
+
+
+def sandbox_command(cmd: list[str], workdir: str | Path | None = None,
+                    mode: str = "auto") -> tuple[list[str], str]:
+    """Wrap `cmd` in the strongest isolation available, and say which one was used.
+
+    bwrap (bubblewrap) is the only mechanism used automatically: it is designed
+    for unprivileged use, so it either works or it does not. `unshare --net`
+    needs capabilities that containers usually withhold — attempting it by
+    default would turn every generation into a permission error, so it is
+    opt-in via FORGE3D_SANDBOX=unshare.
+
+    Returns (command, label). The label goes into the job metadata, so an audit
+    can tell what isolation actually ran rather than what was configured.
+    """
+    mode = (mode or "auto").lower()
+    if mode in ("none", "off", "rlimit"):
+        return list(cmd), "rlimit"
+
+    bwrap = shutil.which("bwrap")
+    if bwrap and workdir and mode in ("auto", "bwrap"):
+        wd = str(Path(workdir).resolve())
+        wrapped = [
+            bwrap,
+            "--ro-bind", "/", "/",
+            "--dev", "/dev",
+            "--proc", "/proc",
+            "--tmpfs", "/tmp",
+            "--unshare-net", "--unshare-pid", "--unshare-uts", "--unshare-ipc",
+            "--die-with-parent", "--new-session",
+            "--bind", wd, wd,
+            "--chdir", wd,
+            "--",
+        ] + list(cmd)
+        return wrapped, "bwrap"
+
+    if mode == "unshare" and IS_LINUX:
+        unshare = shutil.which("unshare")
+        if unshare:
+            return [unshare, "--net", "--"] + list(cmd), "unshare-net"
+
+    if mode in ("auto", "bwrap", "unshare"):
+        return list(cmd), "rlimit"
+    return list(cmd), "rlimit"
+
+
+def sandbox_selftest(mode: str = "auto") -> dict:
+    """Actually try the isolation instead of assuming it works.
+
+    A sandbox that silently fails to apply is worse than none: it produces
+    confident metadata about protection that is not there.
+    """
+    backends = sandbox_backends()
+    cmd, label = sandbox_command([sys.executable, "-c", "print('ok')"], Path.cwd(), mode)
+    if label == "rlimit":
+        return {"requested": mode, "effective": "rlimit", "verified": True,
+                "detail": "no OS-level sandbox available; rlimits only",
+                "backends": backends}
+    result = run(cmd, timeout=30)
+    return {
+        "requested": mode,
+        "effective": label,
+        "verified": bool(result.ok and "ok" in result.output),
+        "detail": (result.output or "").strip()[-300:],
+        "backends": backends,
+    }
