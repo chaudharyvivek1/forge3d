@@ -77,7 +77,7 @@ class TripoProvider(GenerationProvider):
                 payload["negative_prompt"] = request.negative_prompt
 
         resp = request_with_retries("POST", f"{self.base_url()}/v2/openapi/task",
-                                    attempts=3, json=payload,
+                                    json=payload,
                                     headers=self._headers(), timeout=60)
         data = self._unwrap(resp, "submit")
         job_id = data.get("task_id") or data.get("id")
@@ -87,15 +87,17 @@ class TripoProvider(GenerationProvider):
 
     def get_status(self, job_id: str) -> ProviderJob:
         resp = request_with_retries("GET", f"{self.base_url()}/v2/openapi/task/{job_id}",
-                                    attempts=3, headers=self._headers(), timeout=60)
+                                    headers=self._headers(), timeout=60)
         data = self._unwrap(resp, "status")
         output = data.get("output") or {}
-        progress = float(data.get("progress") or 0.0)
+        # Tripo reports 0-100. The earlier `progress / 100 if progress > 1` guard
+        # turned 1% into 100% — one percent is exactly the value it got wrong.
+        progress = min(1.0, max(0.0, float(data.get("progress") or 0.0) / 100.0))
         return ProviderJob(
             provider=self.name,
             job_id=job_id,
             status=normalise_status(data.get("status")),
-            progress=progress / 100.0 if progress > 1 else progress,
+            progress=progress,
             asset_url=output.get("pbr_model") or output.get("model"),
             error=data.get("error") or None,
             raw=data,
