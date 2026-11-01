@@ -207,3 +207,24 @@ def test_many_heartbeats_do_not_deadlock_the_store(tmp_path):
     for job in jobs:
         assert store.get(job.id).status == SUCCEEDED
     assert time.time() - started < 5, "the store is contended by heartbeat threads"
+
+
+# --- the one-command demo ------------------------------------------------
+def test_the_demo_command_runs_with_no_arguments(capsys, monkeypatch, tmp_path):
+    """`forge3d demo` is the advertised one-command try-it; it must actually work."""
+    monkeypatch.setenv("FORGE3D_WORKDIR", str(tmp_path / "work"))
+    config._settings = None
+    try:
+        from forge3d.cli import build_parser
+
+        args = build_parser().parse_args(["demo", "--resolution", "48"])
+        code = args.func(args)
+        out = capsys.readouterr().out
+
+        assert code == 0
+        assert "watertight True" in out
+        assert "validation PASS" in out
+        assert "viewer" in out
+    finally:
+        monkeypatch.delenv("FORGE3D_WORKDIR", raising=False)
+        config._settings = None
