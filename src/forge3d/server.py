@@ -831,6 +831,28 @@ def create_shape(
     """
     from .geometry.surfaces import build_shape
 
+    # `list_shapes` returns catalogue *entries*, so the obvious copy-paste —
+    # passing one straight back into `shape=` — used to die with
+    # "'dict' object has no attribute 'strip'". Accept the entry and use its name
+    # and default parameters; that is what a person means by it.
+    if isinstance(shape, dict):
+        entry = dict(shape)
+        shape = entry.get("name") or entry.get("shape")
+        merged = {**(entry.get("params") or {}), **(params or {})}
+        params = merged
+        if not isinstance(shape, str):
+            return {
+                "ok": False,
+                "error": f"could not find a shape name in {sorted(entry)[:5]}",
+                "hint": "pass shape='torus_knot', or a catalogue entry from list_shapes.",
+            }
+    if not isinstance(shape, str):
+        return {
+            "ok": False,
+            "error": f"shape must be a string, got {type(shape).__name__}",
+            "hint": "call list_shapes for the catalogue; pass one of its `name` values.",
+        }
+
     try:
         mesh = build_shape(shape, params or {}, resolution=resolution)
     except KeyError as exc:
