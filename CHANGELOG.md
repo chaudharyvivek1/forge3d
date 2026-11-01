@@ -4,6 +4,50 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.4.0] — 2026-11-01
+
+Response to an external review of the repo (a ChatGPT transcript): procedural
+geometry generators, a multi-model scene viewer, and a local/cloud safety rule.
+The review's two biggest gaps — no planet generator, no scene editor — were also
+exactly what its own Mars reference scene needed.
+
+### Added
+
+- **`forge3d.geometry.planets`** — deterministic procedural planets:
+  - noise sampled in **3D on the unit sphere**, so the surface has no UV seam;
+  - analytic **craters** with a bowl *and* a raised rim (noise alone reads as dimples);
+  - optional **great-circle canyon** with ridged walls;
+  - **spherical UVs** with baked **albedo / normal / metallic-roughness** maps
+    generated from the same fields the geometry uses, so colour and silhouette agree.
+  - everything seeded: same params, byte-identical output.
+- **`create_planet`** MCP tool (18 tools total) and **`generate_scene`** for
+  multi-body scenes.
+- **`make_scene_viewer`** — composes several GLBs into one self-contained
+  Three.js page with a starfield, a shared sun, orbit controls and snapshots.
+  The single-model viewer could not express the four-planet reference scene.
+- **`ModelSpec.mode`** (`auto` / `local` / `cloud`). `local` never routes to a
+  paid provider and `cloud` never routes to a local engine. Silently upgrading a
+  user into a billable API call is not a feature.
+- `docs/geometry.md` — parameters, the Mars recipe, size budget, and what the
+  generator deliberately does not do.
+
+### Fixed
+
+- **Canyon displacement scaled by radius instead of depth**, producing a
+  displacement larger than the planet itself (relief range -1.82 where it should
+  be -0.07). Caught by asserting the relief range stays inside the radius.
+- **`roughnessTexture` was silently dropped on GLB export.** glTF packs
+  roughness and metallic into one map (`G`/`B`); the standalone image was written
+  but never referenced, so the material looked flat in the viewer.
+- **The `purpose == "web"` routing branch bypassed `spec.mode`**, so a
+  `mode="local"` request could still reach a hosted provider.
+
+### Tests
+
+224 passing (was 198). New `tests/test_planets.py` (26) covers determinism,
+seam-free UVs, crater/canyon effects, PBR round-trip, scene composition, title
+escaping, and the local/cloud routing guarantee.
+
 ## [0.3.0] — 2026-11-01
 
 Secure execution, real image-to-3D, and production reliability. Also fixes the
