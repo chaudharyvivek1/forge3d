@@ -30,6 +30,7 @@ is worse than a loud "unverified".
 from __future__ import annotations
 
 import json
+import os
 import random
 import time
 from abc import ABC, abstractmethod
@@ -112,13 +113,21 @@ class ProviderJob:
         }
 
 
-def request_with_retries(method: str, url: str, attempts: int = 3,
+def request_with_retries(method: str, url: str, attempts: int | None = None,
                          **kwargs) -> requests.Response:
     """HTTP with bounded exponential backoff and jitter.
 
     Retries 5xx and connection errors; never 4xx — a bad request is the caller's
     fault, and retrying it burns the provider's quota and your money.
+
+    `attempts=None` means "use FORGE3D_HOSTED_RETRIES" (default 3). The adapters
+    used to hardcode 3, which silently ignored the documented setting.
     """
+    if attempts is None:
+        try:
+            attempts = int(os.environ.get("FORGE3D_HOSTED_RETRIES", "3"))
+        except ValueError:
+            attempts = 3
     attempts = max(1, int(attempts))
     delay = 1.0
     last: Exception | None = None
