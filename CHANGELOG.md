@@ -4,6 +4,42 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/).
 
+## [0.6.4] — 2026-11-01
+
+CI and concurrency, as the third review recommended before any new features. Two
+real races fixed, and the CI failure caused by my own environment-dependent test.
+
+### Fixed — concurrency
+
+- **Two concurrent image generations deleted each other's reference image.** Temp
+  directories were tracked in a module-global list, and `_cleanup_temp()` popped
+  *every* entry — so whichever generation finished first removed the files the
+  other was still reading. Cleanup is now request-local: `_resolve_image` returns
+  `(path, temp_dir)` and each call removes only its own.
+- **Job listing raced with concurrent writers.** `atomic_write` used the target's
+  suffix for its temp file, so a temp file was named `.forge3d-XXXX.json` and
+  matched the `*.json` glob that `JobStore.list()` scans. A concurrent
+  `os.replace` then made `stat()` raise `FileNotFoundError` mid-sort, taking down
+  the whole `create_model` call — reproduced with three parallel generations.
+  Temp files now use `.tmp`, and the scan skips files that vanish.
+- The concurrency slot was already released in a `finally`; a test now pins that,
+  because a leaked slot wedges the server after a single backend crash.
+
+### Fixed — CI
+
+- **`test_blender_uses_the_configured_timeout_and_reports_isolation` failed on
+  ubuntu only.** It asserted the isolation label was `"none (unavailable)"`,
+  which holds where bubblewrap is absent — but GitHub's Ubuntu runners ship
+  bubblewrap, so the label was `bwrap`. The assertion now checks the invariant
+  that matters: *the label must match what actually happened*.
+
+### Tests
+
+409 passing (was 402). New `tests/test_concurrency.py` (6) covers parallel image
+generations, busy-server behaviour, slot release after a backend exception,
+concurrent job-record writes, distinct output directories for same-named jobs, and
+heartbeat contention.
+
 ## [0.6.3] — 2026-11-01
 
 Security and execution hardening. The third external review found five P1 gaps
